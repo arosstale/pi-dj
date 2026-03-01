@@ -20,6 +20,7 @@
  *   /history              — recently played
  *   /sc <url>             — download SoundCloud → MP3
  *   /bandcamp <url>       — download Bandcamp → MP3
+ *   /bandlab <url>        — download BandLab track/album/collection → MP3
  *   /mix <a> <b> [s]      — crossfade two tracks with ffmpeg
  *   /trim <f> <s> [e]     — trim audio clip
  *   /bpm <file>           — detect BPM
@@ -256,7 +257,7 @@ export default function piDj(pi: ExtensionAPI) {
       scdl:   which("scdl"),
       python: which("python3") || which("python"),
     };
-    for (const sub of ["Lyria","Suno","SoundCloud","Bandcamp","Videos"])
+    for (const sub of ["Lyria","Suno","SoundCloud","Bandcamp","BandLab","Videos"])
       try { mkdirSync(join(musicDir, sub), { recursive: true }); } catch {}
     updateStatus();
     if (statusInterval) clearInterval(statusInterval);
@@ -433,24 +434,62 @@ export default function piDj(pi: ExtensionAPI) {
     },
   });
 
-  // ── /bandcamp — runs yt-dlp directly ─────────────────────────────────
+  // ── shared yt-dlp download helper ────────────────────────────────────
+  async function ytdlpDownload(url: string, outDir: string, ctx: any): Promise<boolean> {
+    if (!tools.ytdlp) { ctx.ui.notify("yt-dlp not found. pip install yt-dlp", "warning"); return false; }
+    try {
+      execSync(
+        `${ytdlpBin()} -x --audio-format mp3 --audio-quality 0 -o "${outDir}/%(uploader)s/%(album,)s%(track_number& - ,)s%(title)s.%(ext)s" "${url}" 2>&1`,
+        { timeout: 120000, encoding: "utf-8" }
+      );
+      ctx.ui.notify(`✅ Downloaded to ${outDir}`, "success");
+      return true;
+    } catch (e: any) {
+      ctx.ui.notify(`Download failed: ${String(e.message || e).slice(0, 200)}`, "error");
+      return false;
+    }
+  }
+
+  // ── /bandcamp ─────────────────────────────────────────────────────────
   pi.registerCommand("bandcamp", {
     description: "Download from Bandcamp → MP3. /bandcamp <url>",
     handler: async (args, ctx) => {
       const url = args?.trim();
       if (!url) { ctx.ui.notify("Usage: /bandcamp <url>", "warning"); return; }
-      if (!tools.ytdlp) { ctx.ui.notify("yt-dlp not found. pip install yt-dlp", "warning"); return; }
-      const outDir = join(musicDir, "Bandcamp");
-      ctx.ui.notify("🎸 Downloading...", "info");
-      try {
-        execSync(
-          `${ytdlpBin()} -x --audio-format mp3 --audio-quality 0 -o "${outDir}/%(artist)s/%(album)s/%(track_number)s - %(title)s.%(ext)s" "${url}" 2>&1`,
-          { timeout: 120000, encoding: "utf-8" }
+      ctx.ui.notify("🎸 Downloading from Bandcamp...", "info");
+      await ytdlpDownload(url, join(musicDir, "Bandcamp"), ctx);
+    },
+  });
+
+  // ── /bandlab ──────────────────────────────────────────────────────────
+  // Supports: track, post, revision, album, collection URLs
+  // bandlab.com/track/<id>           → single track
+  // bandlab.com/post/<id>            → single post
+  // bandlab.com/<user>/albums/<id>   → full album
+  // bandlab.com/<user>/collections/<id> → playlist
+  pi.registerCommand("bandlab", {
+    description: "Download from BandLab → MP3. /bandlab <url>",
+    handler: async (args, ctx) => {
+      const url = args?.trim();
+      if (!url) {
+        ctx.ui.notify(
+          "Usage: /bandlab <url>\n\n" +
+          "Supported URLs:\n" +
+          "  bandlab.com/track/<id>           — single track\n" +
+          "  bandlab.com/post/<id>            — single post\n" +
+          "  bandlab.com/revision/<id>        — specific revision\n" +
+          "  bandlab.com/<user>/albums/<id>   — full album\n" +
+          "  bandlab.com/<user>/collections/<id> — collection",
+          "info"
         );
-        ctx.ui.notify(`✅ Downloaded to ${outDir}`, "success");
-      } catch (e: any) {
-        ctx.ui.notify(`Download failed: ${String(e.message || e).slice(0, 200)}`, "error");
+        return;
       }
+      if (!url.includes("bandlab.com")) {
+        ctx.ui.notify("Not a BandLab URL. Expected bandlab.com/...", "warning"); return;
+      }
+      const isPlaylist = /\/albums\/|\/collections\//.test(url);
+      ctx.ui.notify(isPlaylist ? "💿 Downloading BandLab album/collection..." : "🎵 Downloading from BandLab...", "info");
+      await ytdlpDownload(url, join(musicDir, "BandLab"), ctx);
     },
   });
 
@@ -549,7 +588,8 @@ export default function piDj(pi: ExtensionAPI) {
         `AI RADIO    → /radio lyria (cliamp extension)\n\n` +
         `DOWNLOADS\n` +
         `/sc <url>             SoundCloud → MP3\n` +
-        `/bandcamp <url>       Bandcamp → MP3\n\n` +
+        `/bandcamp <url>       Bandcamp → MP3\n` +
+        `/bandlab <url>        BandLab track/album/collection → MP3\n\n` +
         `PRODUCTION\n` +
         `/mix <a> <b> [s]      crossfade with ffmpeg\n` +
         `/trim <f> <s> [e]     trim clip\n` +
