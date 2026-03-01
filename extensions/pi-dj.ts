@@ -619,9 +619,9 @@ export default function piDj(pi: ExtensionAPI) {
 
       // Font — bundled in assets/ next to this extension
       // Resolve assets/ relative to this extension file.
-      // jiti passes the raw Windows path as import.meta.url (not file://)
-      // so we can use it directly with dirname() — no fileURLToPath needed.
-      const metaUrl = (import.meta as any)?.url ?? "";
+      // jiti passes the raw Windows path as import.meta.url (e.g. C:/...or C:\...)
+      // Normalise to forward slashes so dirname() works on Windows.
+      const metaUrl = ((import.meta as any)?.url ?? "").replace(/\\/g, "/");
       const extDir = metaUrl ? dirname(metaUrl) : __dirname;
       const fontB = join(extDir, "..", "assets", "Inter-Bold.ttf").replace(/\\/g, "/").replace(/^\/([a-z])\//i, "$1:/");
       const fontR = join(extDir, "..", "assets", "Inter-Regular.ttf").replace(/\\/g, "/").replace(/^\/([a-z])\//i, "$1:/");
