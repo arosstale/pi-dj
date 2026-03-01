@@ -1,105 +1,143 @@
 #!/usr/bin/env node
-// render.mjs — CLI for rendering music videos with Remotion
-// Usage: node render.mjs --title "Song" --artist "Artist" --genre "Trap Soul" --audio song.mp3 --out video.mp4
+/**
+ * render.mjs — Remotion music video renderer for pi-dj
+ *
+ * Usage:
+ *   node render.mjs --audio song.mp3 --out video.mp4 [options]
+ *
+ * Options:
+ *   --audio  <file>   Audio file (required)
+ *   --out    <file>   Output MP4 (default: <title>_<style>.mp4)
+ *   --title  <str>    Track title (default: filename)
+ *   --artist <str>    Artist name (default: DJ PiGuy)
+ *   --genre  <str>    Genre label (default: Electronic)
+ *   --style  <str>    bars | wave | circle (default: bars)
+ *   --cover  <file>   Cover image (optional)
+ *   --fps    <n>      Frames per second (default: 30)
+ *   --dur    <n>      Override duration in seconds (default: from audio)
+ *   --width  <n>      Width (default: 1080)
+ *   --height <n>      Height (default: 1080)
+ */
 
-import { bundle } from '@remotion/bundler';
-import { renderMedia, selectComposition } from '@remotion/renderer';
-import { resolve, dirname, basename } from 'path';
-import { fileURLToPath } from 'url';
-import { createServer } from 'http';
-import { readFileSync, existsSync } from 'fs';
+import { bundle }                      from '@remotion/bundler';
+import { renderMedia, selectComposition, getAudioDurationInSeconds } from '@remotion/renderer';
+import { createServer }                from 'node:http';
+import { resolve, dirname, basename, extname } from 'node:path';
+import { readFileSync, existsSync }    from 'node:fs';
+import { fileURLToPath }               from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-// Parse args
-const args = process.argv.slice(2);
-const get = (flag) => {
-  const i = args.indexOf(flag);
-  return i !== -1 ? args[i + 1] : null;
-};
+// ── Args ──────────────────────────────────────────────────────────────────
+const argv = process.argv.slice(2);
+const get  = (flag, def) => { const i = argv.indexOf(flag); return i !== -1 ? argv[i + 1] : def; };
 
-const title  = get('--title')  || 'Untitled';
-const artist = get('--artist') || 'DJ PiGuy';
-const genre  = get('--genre')  || 'Hip-Hop';
-const audio  = get('--audio')  || null;
-const cover  = get('--cover')  || null;
-const out    = get('--out')    || `${title.replace(/\s+/g, '_')}.mp4`;
-const fps    = parseInt(get('--fps') || '30');
-const dur    = parseInt(get('--dur') || '30'); // seconds
+const audioArg  = get('--audio',  null);
+const coverArg  = get('--cover',  null);
+const style     = get('--style',  'bars');
+const fps       = parseInt(get('--fps',    '30'));
+const durArg    = get('--dur',    null);
+const width     = parseInt(get('--width',  '1080'));
+const height    = parseInt(get('--height', '1080'));
+const audioFile = audioArg ? resolve(audioArg) : null;
+const coverFile = coverArg ? resolve(coverArg) : null;
 
-console.log(`\n🎬 pi-dj Remotion Renderer`);
-console.log(`   Title:  ${title}`);
-console.log(`   Artist: ${artist}`);
-console.log(`   Genre:  ${genre}`);
-console.log(`   Audio:  ${audio || 'none'}`);
-console.log(`   Output: ${out}`);
-console.log(`   Duration: ${dur}s @ ${fps}fps\n`);
+if (!audioFile || !existsSync(audioFile)) {
+  console.error('❌ --audio <file> is required and must exist');
+  process.exit(1);
+}
+if (!['bars', 'wave', 'circle'].includes(style)) {
+  console.error('❌ --style must be bars | wave | circle');
+  process.exit(1);
+}
 
-// Serve local files via HTTP so Remotion can access them
+const rawTitle  = get('--title',  basename(audioFile, extname(audioFile)));
+const artist    = get('--artist', 'DJ PiGuy');
+const genre     = get('--genre',  'Electronic');
+const outFile   = get('--out',    resolve(`${rawTitle.replace(/[^\w\s-]/g, '').trim().replace(/\s+/g, '_')}_${style}.mp4`));
+
+// ── Mini HTTP server for local files ─────────────────────────────────────
+const MIME = { mp3:'audio/mpeg', m4a:'audio/mp4', wav:'audio/wav', ogg:'audio/ogg',
+               jpg:'image/jpeg', jpeg:'image/jpeg', png:'image/png', webp:'image/webp' };
+
 function serveFile(filePath) {
   if (!filePath || !existsSync(filePath)) return null;
-  const server = createServer((req, res) => {
-    try {
-      const data = readFileSync(filePath);
-      const ext = filePath.split('.').pop();
-      const mime = { mp3: 'audio/mpeg', m4a: 'audio/mp4', wav: 'audio/wav', jpg: 'image/jpeg', png: 'image/png', webp: 'image/webp' }[ext] || 'application/octet-stream';
-      res.writeHead(200, { 'Content-Type': mime, 'Content-Length': data.length });
-      res.end(data);
-    } catch { res.writeHead(404); res.end(); }
-  });
-  server.listen(0);
-  const port = server.address().port;
+  const data = readFileSync(filePath);
+  const ext  = extname(filePath).slice(1).toLowerCase();
+  const mime = MIME[ext] ?? 'application/octet-stream';
+  const server = createServer((_req, res) => {
+    res.writeHead(200, { 'Content-Type': mime, 'Content-Length': data.length,
+                         'Accept-Ranges': 'bytes' });
+    res.end(data);
+  }).listen(0);
+  const { port } = server.address();
   return { url: `http://localhost:${port}/${basename(filePath)}`, server };
 }
 
+// ── Main ──────────────────────────────────────────────────────────────────
 async function main() {
-  console.log('📦 Bundling...');
-  const bundled = await bundle({
+  console.log(`\n🎬 pi-dj Remotion Renderer`);
+  console.log(`   Audio:  ${audioFile}`);
+  console.log(`   Style:  ${style}`);
+  console.log(`   Title:  ${rawTitle}`);
+  console.log(`   Artist: ${artist}`);
+  console.log(`   Output: ${outFile}\n`);
+
+  // Serve local files so Remotion (headless Chrome) can fetch them
+  const audioServ = serveFile(audioFile);
+  const coverServ = coverFile ? serveFile(coverFile) : null;
+  const audioSrc  = audioServ?.url ?? null;
+  const coverSrc  = coverServ?.url ?? null;
+
+  // Get actual audio duration
+  let durationSec = durArg ? parseFloat(durArg) : null;
+  if (!durationSec) {
+    try {
+      durationSec = await getAudioDurationInSeconds(audioFile);
+      console.log(`   Duration: ${durationSec.toFixed(1)}s (from audio)`);
+    } catch {
+      durationSec = 30;
+      console.warn(`   Duration: 30s (fallback — could not read audio)`);
+    }
+  }
+
+  const durationInFrames = Math.round(durationSec * fps);
+  const inputProps = { title: rawTitle, artist, genre, style, audioSrc, coverSrc };
+
+  console.log('📦 Bundling compositions...');
+  const serveUrl = await bundle({
     entryPoint: resolve(__dirname, 'src/Root.jsx'),
-    webpackOverride: (config) => config,
+    webpackOverride: (c) => c,
   });
-
-  // Serve local audio/cover via HTTP
-  const audioServ = audio ? serveFile(resolve(audio)) : null;
-  const coverServ = cover ? serveFile(resolve(cover)) : null;
-  const audioUrl = audioServ?.url || null;
-  const coverUrl = coverServ?.url || null;
-
-  if (audioUrl) console.log(`🌐 Serving audio: ${audioUrl}`);
-  if (coverUrl) console.log(`🌐 Serving cover: ${coverUrl}`);
-
-  const props = { title, artist, genre, audioFile: audioUrl, coverImage: coverUrl };
 
   console.log('🎯 Selecting composition...');
   const composition = await selectComposition({
-    serveUrl: bundled,
+    serveUrl,
     id: 'MusicVideo',
-    inputProps: props,
+    inputProps,
   });
 
-  const durationInFrames = dur * fps;
-
-  console.log(`🎬 Rendering ${durationInFrames} frames...`);
+  console.log(`🎬 Rendering ${durationInFrames} frames (${durationSec.toFixed(1)}s @ ${fps}fps)...`);
+  let lastPct = -1;
   await renderMedia({
-    composition: { ...composition, durationInFrames, fps },
-    serveUrl: bundled,
+    composition: { ...composition, durationInFrames, fps, width, height },
+    serveUrl,
     codec: 'h264',
-    outputLocation: out,
-    inputProps: props,
+    outputLocation: outFile,
+    inputProps,
     onProgress: ({ progress }) => {
       const pct = Math.round(progress * 100);
-      process.stdout.write(`\r   Progress: ${pct}%`);
+      if (pct !== lastPct) { process.stdout.write(`\r   ${pct}%`); lastPct = pct; }
     },
   });
 
-  // Cleanup servers
   audioServ?.server.close();
   coverServ?.server.close();
 
-  console.log(`\n\n✅ Done! Saved: ${out}`);
+  console.log(`\n\n✅ ${outFile}`);
 }
 
-main().catch((e) => {
-  console.error('❌ Error:', e.message);
+main().catch(e => {
+  console.error('\n❌', e.message || e);
   process.exit(1);
 });

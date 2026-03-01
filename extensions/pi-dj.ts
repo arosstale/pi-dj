@@ -21,6 +21,7 @@
  *   /sc <url>             — download SoundCloud → MP3
  *   /bandcamp <url>       — download Bandcamp → MP3
  *   /bandlab <url>        — download BandLab track/album/collection → MP3
+ *   /render <file|url> [style] — render music video with Remotion (bars|wave|circle)
  *   /mix <a> <b> [s]      — crossfade two tracks with ffmpeg
  *   /trim <f> <s> [e]     — trim audio clip
  *   /bpm <file>           — detect BPM
@@ -32,7 +33,8 @@ import { Type } from "@sinclair/typebox";
 import { execSync, spawn, type ChildProcess } from "node:child_process";
 import { existsSync, readFileSync, mkdirSync } from "node:fs";
 import { homedir, platform, tmpdir } from "node:os";
-import { join, basename } from "node:path";
+import { join, basename, extname, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import * as net from "node:net";
 
 // ── Platform ───────────────────────────────────────────────────────────────
@@ -565,6 +567,79 @@ export default function piDj(pi: ExtensionAPI) {
     },
   });
 
+  // ── /render — Remotion music video ───────────────────────────────────
+  pi.registerCommand("render", {
+    description: "Render a music video with Remotion. /render <audio-file> [bars|wave|circle]",
+    handler: async (args, ctx) => {
+      const parts = (args?.trim() || "").split(/\s+/);
+      const [audioArg, styleArg = "bars"] = parts;
+      if (!audioArg) {
+        ctx.ui.notify(
+          "Usage: /render <audio-file|youtube-url> [style]\n\n" +
+          "Styles:\n" +
+          "  bars   — FFT spectrum bars (default)\n" +
+          "  wave   — scrolling waveform\n" +
+          "  circle — radial spectrum ring\n\n" +
+          "Examples:\n" +
+          "  /render ~/Music/track.mp3\n" +
+          "  /render ~/Music/track.mp3 circle\n" +
+          "  /render https://youtu.be/xxx bars",
+          "info"
+        );
+        return;
+      }
+      if (!["bars", "wave", "circle"].includes(styleArg)) {
+        ctx.ui.notify(`Unknown style "${styleArg}". Use: bars | wave | circle`, "warning"); return;
+      }
+
+      // Resolve: if it's a URL, download first
+      let audioFile = audioArg;
+      if (/^https?:\/\//.test(audioArg)) {
+        if (!tools.ytdlp) { ctx.ui.notify("yt-dlp required for URL. pip install yt-dlp", "warning"); return; }
+        const outDir = join(musicDir, "Videos");
+        ctx.ui.notify(`⬇️ Downloading audio for render...`, "info");
+        try {
+          const dlOut = execSync(
+            `${ytdlpBin()} -x --audio-format mp3 --audio-quality 0 -o "${outDir}/%(title)s.%(ext)s" --print after_move:filepath "${audioArg}" 2>/dev/null`,
+            { encoding: "utf-8", timeout: 120000 }
+          ).trim().split(/\r?\n/).pop() || "";
+          if (!dlOut || !existsSync(dlOut)) { ctx.ui.notify("Download failed", "error"); return; }
+          audioFile = dlOut;
+        } catch (e: any) {
+          ctx.ui.notify(`Download failed: ${String(e.message).slice(0, 200)}`, "error"); return;
+        }
+      } else {
+        // Expand ~ manually (Windows-safe)
+        audioFile = audioFile.replace(/^~/, HOME);
+        if (!existsSync(audioFile)) { ctx.ui.notify(`File not found: ${audioFile}`, "warning"); return; }
+      }
+
+      // Resolve extension dir → repo root → remotion/render.mjs
+      const extDir = (typeof import.meta !== "undefined" && (import.meta as any).url)
+        ? dirname(fileURLToPath((import.meta as any).url))
+        : __dirname;
+      const renderScript = join(extDir, "..", "remotion", "render.mjs");
+      if (!existsSync(renderScript)) {
+        ctx.ui.notify(`Remotion renderer not found at:\n${renderScript}`, "error"); return;
+      }
+
+      const outFile = join(musicDir, "Videos",
+        `${basename(audioFile, extname(audioFile))}_${styleArg}.mp4`);
+
+      ctx.ui.notify(`🎬 Rendering ${styleArg} video...\nThis takes a few minutes.`, "info");
+
+      try {
+        execSync(
+          `node "${renderScript}" --audio "${audioFile}" --style ${styleArg} --out "${outFile}"`,
+          { encoding: "utf-8", timeout: 600000, stdio: "inherit" }
+        );
+        ctx.ui.notify(`✅ Video saved:\n${outFile}`, "success");
+      } catch (e: any) {
+        ctx.ui.notify(`Render failed: ${String(e.message || e).slice(0, 300)}`, "error");
+      }
+    },
+  });
+
   // ── /dj-help ──────────────────────────────────────────────────────────
   pi.registerCommand("dj-help", {
     description: "Show pi-dj commands and tool status",
@@ -591,6 +666,7 @@ export default function piDj(pi: ExtensionAPI) {
         `/bandcamp <url>       Bandcamp → MP3\n` +
         `/bandlab <url>        BandLab track/album/collection → MP3\n\n` +
         `PRODUCTION\n` +
+        `/render <f> [style]   music video (bars|wave|circle) via Remotion\n` +
         `/mix <a> <b> [s]      crossfade with ffmpeg\n` +
         `/trim <f> <s> [e]     trim clip\n` +
         `/bpm <file>           detect BPM\n\n` +
