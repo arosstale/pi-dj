@@ -34,7 +34,6 @@ import { execSync, spawn, type ChildProcess } from "node:child_process";
 import { existsSync, readFileSync, mkdirSync } from "node:fs";
 import { homedir, platform, tmpdir } from "node:os";
 import { join, basename, extname, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
 import * as net from "node:net";
 
 // ── Platform ───────────────────────────────────────────────────────────────
@@ -619,9 +618,11 @@ export default function piDj(pi: ExtensionAPI) {
       }
 
       // Font — bundled in assets/ next to this extension
-      const extDir = (typeof import.meta !== "undefined" && (import.meta as any).url)
-        ? dirname(fileURLToPath((import.meta as any).url))
-        : __dirname;
+      // Resolve assets/ relative to this extension file.
+      // jiti passes the raw Windows path as import.meta.url (not file://)
+      // so we can use it directly with dirname() — no fileURLToPath needed.
+      const metaUrl = (import.meta as any)?.url ?? "";
+      const extDir = metaUrl ? dirname(metaUrl) : __dirname;
       const fontB = join(extDir, "..", "assets", "Inter-Bold.ttf").replace(/\\/g, "/").replace(/^\/([a-z])\//i, "$1:/");
       const fontR = join(extDir, "..", "assets", "Inter-Regular.ttf").replace(/\\/g, "/").replace(/^\/([a-z])\//i, "$1:/");
 
