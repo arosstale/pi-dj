@@ -1,0 +1,11 @@
+{
+  "name": "pi-dj",
+  "version": "1.0.0",
+  "description": "Full AI music suite for pi — Lyria RealTime, Suno generation, SoundCloud/Bandcamp downloads, Space DJ galaxy, cliamp playback",
+  "keywords": ["pi", "music", "lyria", "suno", "cliamp", "soundcloud", "bandcamp", "ai", "dj"],
+  "author": "71tick",
+  "license": "MIT",
+  "pi": {
+    "extensions": ["extensions/pi-dj.ts"]
+  }
+}
