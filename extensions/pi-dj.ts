@@ -25,6 +25,8 @@
  *   /mix <a> <b> [s]      — crossfade two tracks with ffmpeg
  *   /trim <f> <s> [e]     — trim audio clip
  *   /bpm <file>           — detect BPM
+ *   /radio <genre|name|country|url> — global internet radio (Radio Browser)
+ *   /radio lyria [preset]           — Lyria AI generative radio
  *   /dj-help              — commands + tool status
  */
 
@@ -664,6 +666,148 @@ export default function piDj(pi: ExtensionAPI) {
     },
   });
 
+  // ── /radio ────────────────────────────────────────────────────────────
+  // Radio Browser API (https://api.radio-browser.info) — 30k+ stations, no key needed
+  // Supports: genre/tag, station name, country, or raw stream URL
+  // Also routes "lyria" to cliamp's Lyria AI radio
+  pi.registerCommand("radio", {
+    description: [
+      "Global internet radio or Lyria AI radio.",
+      "/radio lofi               — find & play lofi stations",
+      "/radio jazz japan         — jazz stations from Japan",
+      "/radio <http url>         — play stream URL directly",
+      "/radio lyria              — Lyria AI generative radio (preset 1)",
+      "/radio lyria chill        — Lyria with preset name",
+      "/radio lyria <1-9>        — Lyria by preset number",
+    ].join("\n"),
+    handler: async (args, ctx) => {
+      const query = args.trim();
+      if (!query) {
+        ctx.ui.notify(
+          "Usage:\n" +
+          "  /radio <genre|name|country>  — search Radio Browser (30k+ stations)\n" +
+          "  /radio <http url>            — stream URL directly\n" +
+          "  /radio lyria [preset]        — Lyria AI radio\n\n" +
+          "Examples:\n" +
+          "  /radio lofi\n" +
+          "  /radio jazz\n" +
+          "  /radio classical germany\n" +
+          "  /radio lyria chill",
+          "info"
+        );
+        return;
+      }
+
+      // ── Lyria AI radio → delegate to lyria-cli (same as cliamp) ─────────
+      if (query.toLowerCase().startsWith("lyria")) {
+        const lyriaPath = join(HOME, "Music", "lyria-cli", "index.js");
+        if (!existsSync(lyriaPath)) {
+          ctx.ui.notify(
+            "lyria-cli not found.\nSetup:\n  cd ~/Music && git clone https://github.com/arosstale/lyria-cli && cd lyria-cli && npm install",
+            "warning"
+          );
+          return;
+        }
+        const preset = query.replace(/^lyria\s*/i, "").trim() || "1";
+        const args2 = /^\d$/.test(preset) ? [preset] : ["--prompt", preset];
+        ctx.ui.notify(`🤖 Lyria AI radio — ${preset || "preset 1"}`, "info");
+        spawn("node", [lyriaPath, ...args2], { detached: true, stdio: "ignore" }).unref();
+        return;
+      }
+
+      // ── Raw HTTP stream URL ──────────────────────────────────────────────
+      if (query.startsWith("http")) {
+        if (!tools?.mpv) { ctx.ui.notify(`mpv not installed. ${installHint()}`, "error"); return; }
+        ctx.ui.notify(`📻 Streaming: ${query}`, "info");
+        if (mpvProcess) { try { mpvProcess.kill(); } catch {} }
+        mpvProcess = spawn(tools.mpv, [
+          "--no-video", "--idle=yes",
+          `--input-ipc-server=${IPC_PATH}`,
+          query,
+        ], { stdio: "ignore" });
+        mpvProcess.unref();
+        isPlaying = true; isPaused = false;
+        updateStatus();
+        return;
+      }
+
+      // ── Radio Browser API search ─────────────────────────────────────────
+      if (!tools?.mpv) { ctx.ui.notify(`mpv not installed. ${installHint()}`, "error"); return; }
+
+      ctx.ui.notify(`📻 Searching Radio Browser for "${query}"…`, "info");
+
+      // Parse "jazz japan" → search by name+country or tag
+      const parts = query.split(/\s+/);
+      const RADIO_API = "https://de1.api.radio-browser.info/json";
+
+      interface RadioStation { name: string; url_resolved: string; country: string; tags: string; votes: number; }
+
+      async function searchStations(endpoint: string): Promise<RadioStation[]> {
+        try {
+          const res = await fetch(`${RADIO_API}${endpoint}&hidebroken=true&order=votes&reverse=true&limit=5`);
+          if (!res.ok) return [];
+          return (await res.json()) as RadioStation[];
+        } catch { return []; }
+      }
+
+      // Try: tag search first, then name search, then country
+      let stations: RadioStation[] = [];
+      const term = parts.join(" ");
+
+      // If 2+ words, try: last word as country, rest as tag
+      if (parts.length > 1) {
+        const country = parts[parts.length - 1];
+        const tag = parts.slice(0, -1).join(" ");
+        const byCountry = await searchStations(
+          `/stations/bycountry/${encodeURIComponent(country)}?tag=${encodeURIComponent(tag)}`
+        );
+        if (byCountry.length) stations = byCountry;
+      }
+
+      if (!stations.length) {
+        const byTag  = await searchStations(`/stations/bytag/${encodeURIComponent(term)}`);
+        const byName = await searchStations(`/stations/byname/${encodeURIComponent(term)}`);
+        // Merge, deduplicate by url
+        const seen = new Set<string>();
+        for (const s of [...byTag, ...byName]) {
+          if (!seen.has(s.url_resolved)) { seen.add(s.url_resolved); stations.push(s); }
+        }
+        stations.sort((a, b) => b.votes - a.votes);
+        stations = stations.slice(0, 5);
+      }
+
+      if (!stations.length) {
+        ctx.ui.notify(`No stations found for "${query}". Try a genre like: jazz, lofi, classical, pop, rock`, "warning");
+        return;
+      }
+
+      // Pick top station and play
+      const station = stations[0];
+      const streamUrl = station.url_resolved;
+      const label = `${station.name}${station.country ? ` (${station.country})` : ""}`;
+
+      ctx.ui.notify(
+        `📻 ${label}\n` +
+        (stations.length > 1
+          ? `Other matches: ${stations.slice(1).map(s => s.name).join(", ")}`
+          : ""),
+        "info"
+      );
+
+      if (mpvProcess) { try { mpvProcess.kill(); } catch {} }
+      mpvProcess = spawn(tools.mpv, [
+        "--no-video", "--idle=yes",
+        `--input-ipc-server=${IPC_PATH}`,
+        `--title=${label}`,
+        streamUrl,
+      ], { stdio: "ignore" });
+      mpvProcess.unref();
+      isPlaying = true; isPaused = false;
+      nowPlaying = label;
+      updateStatus();
+    },
+  });
+
   // ── /dj-help ──────────────────────────────────────────────────────────
   pi.registerCommand("dj-help", {
     description: "Show pi-dj commands and tool status",
@@ -683,8 +827,13 @@ export default function piDj(pi: ExtensionAPI) {
         `/skip                 next track\n` +
         `/repeat               toggle loop\n` +
         `/history              recently played\n\n` +
-        `LOCAL FILES → /play (cliamp TUI)\n` +
-        `AI RADIO    → /radio lyria (cliamp extension)\n\n` +
+        `RADIO\n` +
+        `/radio <genre|name>   internet radio (Radio Browser, 30k+ stations)\n` +
+        `/radio jazz japan     genre + country filter\n` +
+        `/radio lyria          Lyria AI generative radio\n` +
+        `/radio lyria chill    Lyria with preset\n` +
+        `/radio <http url>     stream URL directly\n\n` +
+        `LOCAL FILES → /play (cliamp TUI)\n\n` +
         `DOWNLOADS\n` +
         `/sc <url>             SoundCloud → MP3\n` +
         `/bandcamp <url>       Bandcamp → MP3\n` +
@@ -734,6 +883,95 @@ export default function piDj(pi: ExtensionAPI) {
       }
       trackQueue.push(track);
       return { content: [{ type: "text", text: `Queued #${trackQueue.length}: ${track.title}` }] };
+    },
+  });
+
+  pi.registerTool({
+    name: "dj_radio",
+    label: "DJ Radio",
+    description:
+      "Search and play global internet radio stations via Radio Browser (30k+ stations, no API key). " +
+      "Search by genre (jazz, lofi, classical), station name, or country. " +
+      "Use 'lyria' for AI generative radio, or pass a direct HTTP stream URL.",
+    parameters: Type.Object({
+      query: Type.String({
+        description:
+          "Genre, station name, or country (e.g. 'lofi', 'jazz japan', 'classical germany'). " +
+          "Or 'lyria' / 'lyria chill' for AI radio. Or a direct HTTP stream URL.",
+      }),
+    }),
+    async execute(_id, params) {
+      if (!tools?.mpv) return { content: [{ type: "text", text: `mpv not installed. ${installHint()}` }], isError: true };
+      const q = params.query.trim();
+
+      // Lyria
+      if (q.toLowerCase().startsWith("lyria")) {
+        const lyriaPath = join(HOME, "Music", "lyria-cli", "index.js");
+        if (!existsSync(lyriaPath)) return { content: [{ type: "text", text: "lyria-cli not found. Run /radio lyria for setup." }], isError: true };
+        const preset = q.replace(/^lyria\s*/i, "").trim() || "1";
+        const args2 = /^\d$/.test(preset) ? [preset] : ["--prompt", preset];
+        spawn("node", [lyriaPath, ...args2], { detached: true, stdio: "ignore" }).unref();
+        return { content: [{ type: "text", text: `🤖 Lyria AI radio — ${preset}` }] };
+      }
+
+      // Direct URL
+      if (q.startsWith("http")) {
+        if (mpvProcess) { try { mpvProcess.kill(); } catch {} }
+        mpvProcess = spawn(tools.mpv, ["--no-video", "--idle=yes", `--input-ipc-server=${IPC_PATH}`, q], { stdio: "ignore" });
+        mpvProcess.unref();
+        isPlaying = true; isPaused = false; nowPlaying = q; updateStatus();
+        return { content: [{ type: "text", text: `📻 Streaming: ${q}` }] };
+      }
+
+      // Radio Browser search
+      interface RadioStation { name: string; url_resolved: string; country: string; votes: number; }
+      const parts = q.split(/\s+/);
+      const RADIO_API = "https://de1.api.radio-browser.info/json";
+      async function search(ep: string): Promise<RadioStation[]> {
+        try {
+          const r = await fetch(`${RADIO_API}${ep}&hidebroken=true&order=votes&reverse=true&limit=5`);
+          return r.ok ? (await r.json() as RadioStation[]) : [];
+        } catch { return []; }
+      }
+
+      let stations: RadioStation[] = [];
+      if (parts.length > 1) {
+        const country = parts[parts.length - 1];
+        const tag = parts.slice(0, -1).join(" ");
+        stations = await search(`/stations/bycountry/${encodeURIComponent(country)}?tag=${encodeURIComponent(tag)}`);
+      }
+      if (!stations.length) {
+        const term = q;
+        const [byTag, byName] = await Promise.all([
+          search(`/stations/bytag/${encodeURIComponent(term)}`),
+          search(`/stations/byname/${encodeURIComponent(term)}`),
+        ]);
+        const seen = new Set<string>();
+        for (const s of [...byTag, ...byName]) {
+          if (!seen.has(s.url_resolved)) { seen.add(s.url_resolved); stations.push(s); }
+        }
+        stations.sort((a, b) => b.votes - a.votes);
+        stations = stations.slice(0, 5);
+      }
+
+      if (!stations.length) return { content: [{ type: "text", text: `No stations found for "${q}"` }], isError: true };
+
+      const station = stations[0];
+      const label = `${station.name}${station.country ? ` (${station.country})` : ""}`;
+      if (mpvProcess) { try { mpvProcess.kill(); } catch {} }
+      mpvProcess = spawn(tools.mpv, [
+        "--no-video", "--idle=yes", `--input-ipc-server=${IPC_PATH}`, `--title=${label}`, station.url_resolved,
+      ], { stdio: "ignore" });
+      mpvProcess.unref();
+      isPlaying = true; isPaused = false; nowPlaying = label; updateStatus();
+
+      const others = stations.slice(1).map(s => s.name).join(", ");
+      return {
+        content: [{
+          type: "text",
+          text: `📻 ${label}${others ? `\nOther matches: ${others}` : ""}`,
+        }],
+      };
     },
   });
 }

@@ -49,13 +49,20 @@ Dependencies are optional. The extension detects what's installed and degrades g
 | `/bandcamp <url>` | Bandcamp track or album → MP3 |
 | `/bandlab <url>` | BandLab track, album, or collection → MP3 |
 
-### AI
+### Radio
 
 | Command | Description |
 |---------|-------------|
-| `/dj [preset]` | Lyria RealTime AI radio — live generative stream |
+| `/radio <genre\|name>` | Search Radio Browser — 30k+ global stations, no API key |
+| `/radio jazz japan` | Genre + country filter |
+| `/radio <http url>` | Play any stream URL directly |
+| `/radio lyria` | Lyria RealTime AI generative radio (preset 1) |
+| `/radio lyria chill` | Lyria with preset name or custom prompt |
+| `/radio lyria <1-9>` | Lyria by preset number |
 
-Presets: `1-9`, `chill`, `beats`, or any lyria-cli keyword. Requires [lyria-cli](https://github.com/cjpais/lyria-cli).
+Radio Browser has 30k+ stations across every genre and country. Top station by votes plays automatically; alternatives listed.
+
+Lyria requires [lyria-cli](https://github.com/arosstale/lyria-cli).
 
 ### Production
 
@@ -98,6 +105,7 @@ Two tools the AI can call directly mid-conversation:
 |------|-------------|
 | `dj_play_music` | Stream a YouTube search or URL |
 | `dj_queue_music` | Add a track to the queue |
+| `dj_radio` | Search and play global radio — genre, country, Lyria AI, or stream URL |
 
 ## Division of Labour
 
