@@ -122,7 +122,7 @@ let history: { title: string; url: string; playedAt: number }[] = [];
 let statusCtx: any = null;
 let cfg: DjConfig;
 let musicDir: string;
-let tools: { mpv: string|null; ytdlp: string|null; ffmpeg: string|null; scdl: string|null; python: string|null };
+let tools: { mpv: string|null; ytdlp: string|null; ffmpeg: string|null; scdl: string|null; python: string|null; cliamp: string|null };
 
 // ── Status bar ─────────────────────────────────────────────────────────────
 function fmt(s: number): string {
@@ -163,6 +163,28 @@ function ytdlpBin(): string {
     : ["/usr/local/bin/yt-dlp", `${HOME}/.local/bin/yt-dlp`];
   for (const c of candidates) if (existsSync(c)) return c;
   return "yt-dlp";
+}
+
+// ── Stream player: mpv preferred, cliamp fallback ─────────────────────────
+// Returns the label for now-playing, or throws on no player available.
+function playStream(url: string, label: string): void {
+  if (tools?.mpv) {
+    if (mpvProcess) { try { mpvProcess.kill(); } catch {} }
+    mpvProcess = spawn(tools.mpv, [
+      "--no-video", "--idle=yes",
+      `--input-ipc-server=${IPC_PATH}`,
+      `--title=${label}`,
+      url,
+    ], { stdio: "ignore" });
+    mpvProcess.unref();
+  } else if (tools?.cliamp) {
+    // cliamp opens as a TUI — spawn detached so it gets its own terminal
+    spawn(tools.cliamp, [url], { detached: true, stdio: "ignore" }).unref();
+  } else {
+    throw new Error(`No player found. ${installHint()}`);
+  }
+  isPlaying = true; isPaused = false; nowPlaying = label;
+  updateStatus();
 }
 
 // ── Resolve a single track ─────────────────────────────────────────────────
@@ -259,6 +281,7 @@ export default function piDj(pi: ExtensionAPI) {
       ffmpeg: which("ffmpeg"),
       scdl:   which("scdl"),
       python: which("python3") || which("python"),
+      cliamp: which("cliamp") || existsSync(join(HOME, "bin", "cliamp.exe")) ? join(HOME, "bin", "cliamp.exe") : null,
     };
     for (const sub of ["Lyria","Suno","SoundCloud","Bandcamp","BandLab","Videos"])
       try { mkdirSync(join(musicDir, sub), { recursive: true }); } catch {}
@@ -717,22 +740,14 @@ export default function piDj(pi: ExtensionAPI) {
 
       // ── Raw HTTP stream URL ──────────────────────────────────────────────
       if (query.startsWith("http")) {
-        if (!tools?.mpv) { ctx.ui.notify(`mpv not installed. ${installHint()}`, "error"); return; }
+        if (!tools?.mpv && !tools?.cliamp) { ctx.ui.notify(`No player found. ${installHint()}`, "error"); return; }
         ctx.ui.notify(`📻 Streaming: ${query}`, "info");
-        if (mpvProcess) { try { mpvProcess.kill(); } catch {} }
-        mpvProcess = spawn(tools.mpv, [
-          "--no-video", "--idle=yes",
-          `--input-ipc-server=${IPC_PATH}`,
-          query,
-        ], { stdio: "ignore" });
-        mpvProcess.unref();
-        isPlaying = true; isPaused = false;
-        updateStatus();
+        try { playStream(query, query); } catch (e: any) { ctx.ui.notify(String(e.message), "error"); }
         return;
       }
 
       // ── Radio Browser API search ─────────────────────────────────────────
-      if (!tools?.mpv) { ctx.ui.notify(`mpv not installed. ${installHint()}`, "error"); return; }
+      if (!tools?.mpv && !tools?.cliamp) { ctx.ui.notify(`No player found. ${installHint()}`, "error"); return; }
 
       ctx.ui.notify(`📻 Searching Radio Browser for "${query}"…`, "info");
 
@@ -794,17 +809,8 @@ export default function piDj(pi: ExtensionAPI) {
         "info"
       );
 
-      if (mpvProcess) { try { mpvProcess.kill(); } catch {} }
-      mpvProcess = spawn(tools.mpv, [
-        "--no-video", "--idle=yes",
-        `--input-ipc-server=${IPC_PATH}`,
-        `--title=${label}`,
-        streamUrl,
-      ], { stdio: "ignore" });
-      mpvProcess.unref();
-      isPlaying = true; isPaused = false;
-      nowPlaying = label;
-      updateStatus();
+      try { playStream(streamUrl, label); }
+      catch (e: any) { ctx.ui.notify(String(e.message), "error"); }
     },
   });
 
@@ -916,10 +922,8 @@ export default function piDj(pi: ExtensionAPI) {
 
       // Direct URL
       if (q.startsWith("http")) {
-        if (mpvProcess) { try { mpvProcess.kill(); } catch {} }
-        mpvProcess = spawn(tools.mpv, ["--no-video", "--idle=yes", `--input-ipc-server=${IPC_PATH}`, q], { stdio: "ignore" });
-        mpvProcess.unref();
-        isPlaying = true; isPaused = false; nowPlaying = q; updateStatus();
+        try { playStream(q, q); }
+        catch (e: any) { return { content: [{ type: "text", text: String(e.message) }], isError: true }; }
         return { content: [{ type: "text", text: `📻 Streaming: ${q}` }] };
       }
 
@@ -958,12 +962,8 @@ export default function piDj(pi: ExtensionAPI) {
 
       const station = stations[0];
       const label = `${station.name}${station.country ? ` (${station.country})` : ""}`;
-      if (mpvProcess) { try { mpvProcess.kill(); } catch {} }
-      mpvProcess = spawn(tools.mpv, [
-        "--no-video", "--idle=yes", `--input-ipc-server=${IPC_PATH}`, `--title=${label}`, station.url_resolved,
-      ], { stdio: "ignore" });
-      mpvProcess.unref();
-      isPlaying = true; isPaused = false; nowPlaying = label; updateStatus();
+      try { playStream(station.url_resolved, label); }
+      catch (e: any) { return { content: [{ type: "text", text: String(e.message) }], isError: true }; }
 
       const others = stations.slice(1).map(s => s.name).join(", ");
       return {
