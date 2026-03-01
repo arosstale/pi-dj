@@ -1,130 +1,151 @@
 # pi-dj 🎧
 
-> The CLI that powers [dj-piguy.com](https://dj-piguy.com) — an AI radio station built entirely inside [pi](https://github.com/badlogic/pi-mono).
+AI music production suite for [pi](https://github.com/badlogic/pi-mono).
 
-Full AI music suite for pi. Generate, stream, sample, download, and publish music — all from your terminal.
+Stream YouTube, generate AI music with Suno, live-stream Lyria RealTime, download SoundCloud & Bandcamp, mix, trim, BPM — all from the terminal.
 
-## Demo
+## Platforms
 
-🎵 **[dj-piguy.com](https://dj-piguy.com)** — 32+ AI-generated tracks, live radio, built with this extension.
+| Platform | Status |
+|----------|--------|
+| Windows (Git Bash / WSL) | ✅ |
+| macOS | ✅ |
+| Linux | ✅ |
+| Raspberry Pi | ✅ |
+| Termux (Android) | ✅ |
 
 ## Install
 
 ```bash
-pi install git:github.com/arosstale/pi-dj
+pi install npm:pi-dj
 ```
 
-### Requirements
+### Dependencies by platform
 
-- **[cliamp](https://github.com/bjarneo/cliamp)** — Terminal Winamp player
-- **scdl** — `uv tool install scdl`
-- **yt-dlp** — `uv tool install yt-dlp`
-- **Gemini API key** — free at [aistudio.google.com](https://aistudio.google.com/apikey)
-- **Suno API key** — [sunoapi.org](https://sunoapi.org)
-
+**Windows**
 ```bash
-export GEMINI_API_KEY="your-key"
-export SUNO_API_KEY="your-key"
+winget install mpv
+pip install yt-dlp
+winget install ffmpeg
 ```
 
----
+**macOS**
+```bash
+brew install mpv yt-dlp ffmpeg
+```
+
+**Linux / Raspberry Pi**
+```bash
+sudo apt install mpv ffmpeg -y
+pip install yt-dlp
+```
+
+**Termux (Android)**
+```bash
+pkg install mpv ffmpeg python
+pip install yt-dlp
+# Optional: better SoundCloud downloads
+pip install scdl
+```
+
+You don't need everything — the extension detects what's installed and degrades gracefully.
 
 ## Commands
 
-| Command | What |
-|---------|------|
-| `/dj [1-9]` | **Lyria RealTime** live AI stream — 9 presets |
-| `/spacedj` | **Space DJ** — fly a 3D genre galaxy, Lyria blends sounds live |
-| `/generate [prompt]` | **Suno** AI song + auto-play with cliamp |
-| `/sample` | Record Lyria stream → MP3 |
-| `/music [1-6]` | Browse & play your full music library |
-| `/sc [url]` | Download from SoundCloud |
-| `/bandcamp [url]` | Download from Bandcamp |
-| `/play [path]` | Play any path with cliamp |
-| `/dj-status` | Library stats — songs, disk, downloads |
+### Playback
+| Command | What it does |
+|---------|-------------|
+| `/play <query\|path>` | YouTube search, URL, or local file |
+| `/pause` | Toggle pause |
+| `/stop` | Stop + clear queue |
+| `/np` | Now playing + queue count |
+| `/vol <0-100>` | Volume |
+| `/queue <query>` | Add track to queue |
+| `/skip` | Skip to next |
 
-### `/music` libraries
+### AI Music
+| Command | What it does |
+|---------|-------------|
+| `/generate <prompt>` | Generate a song with Suno AI |
+| `/dj [1-9]` | Stream live AI music with Lyria RealTime |
 
-```
-1 = SoundCloud (34GB)       ☁️  5600+ liked tracks
-2 = SoundCloud overflow      ☁️  extra downloads
-3 = Bandcamp (441MB)         🎸  full discographies
-4 = Suno AI (115MB)          🤖  your generated songs
-5 = 2026 Collection          📀  curated folder
-6 = Lyria Samples            🎛️  recorded AI streams
-```
+**Lyria presets:**
+`1` Carmack Core · `2` Chill · `3` Hard · `4` Soul Flip · `5` Chaos · `6` Jersey Club · `7` Soulection · `8` Drill · `9` Afrobeats
 
----
+### Downloads
+| Command | What it does |
+|---------|-------------|
+| `/sc <url>` | SoundCloud (scdl or yt-dlp fallback) |
+| `/bandcamp <url>` | Bandcamp (yt-dlp) |
 
-## Lyria Presets
+### Production
+| Command | What it does |
+|---------|-------------|
+| `/mix <a> <b> [secs]` | Crossfade two tracks with ffmpeg |
+| `/trim <file> <start> [end]` | Trim audio clip (seconds) |
+| `/bpm <file>` | Detect BPM (librosa) |
+| `/dj-help` | All commands + tool status |
 
-```
-1 = Carmack Core     90 bpm   trap soul, chopped samples, 808s
-2 = Chill            75 bpm   lo-fi hip hop, vinyl, mellow
-3 = Hard            140 bpm   heavy trap, distorted 808s
-4 = Soul Flip        85 bpm   neo soul, jazzy chords, vinyl crackle
-5 = Chaos           110 bpm   glitch hop, pitched vocal chops
-6 = Jersey Club     140 bpm   fast hi-hats, aggressive kicks
-7 = Soulection       88 bpm   future beats, dreamy pads
-8 = Drill           145 bpm   dark strings, sliding 808s
-9 = Afrobeats       100 bpm   percussion, tropical, rhythmic
-```
+## AI DJ (LLM tools)
 
-Inside `/dj`: type **1-9** to switch, **p** pause, **r** resume, **q** quit, or type any custom prompt.
+pi-dj registers tools the AI can use directly:
 
----
+- *"play something chill"* → `play_music`
+- *"queue 5 ambient tracks"* → `queue_music`
 
-## Space DJ
+## Config (optional)
 
-```
-/spacedj
-```
+Create `~/.pi-dj.json`:
 
-Fly through a 3D galaxy of genres. Arrow keys move your ship. Lyria blends nearby genres in real-time. Land between Trap and Soul Flip for a Carmack zone. Space = autopilot.
-
-Inspired by [Google Magenta's Space DJ](https://magenta.withgoogle.com/spacedj-announce).
-
----
-
-## How dj-piguy.com was built
-
-Every track on [dj-piguy.com](https://dj-piguy.com) was generated using pi + Suno:
-
-```
-/generate volcanic bassline hip hop beat heavy 808s
-→ Suno generates 2 variants
-→ cliamp plays them back  
-→ pick the best one
-→ publish to dj-piguy.com
+```json
+{
+  "musicDir": "/path/to/music",
+  "sunoApiKey": "your-suno-key",
+  "googleApiKey": "your-gemini-key"
+}
 ```
 
-The whole workflow — idea to published track — runs inside pi.
+Or env vars: `PI_DJ_MUSIC`, `SUNO_API_KEY`, `GOOGLE_API_KEY`
 
----
+Default music dirs:
+- Windows/macOS/Linux: `~/Music`
+- Termux: `~/storage/music`
 
-## Ecosystem
+## How it works
 
-pi-dj is the **CLI companion** to [OpenVoiceUI](https://github.com/MCERQUA/OpenVoiceUI-public) — a browser-based voice agent platform with animated face, music player, Suno integration, and web canvas display built by [@MetaMikeC](https://github.com/MCERQUA).
+```
+yt-dlp "ytsearch:<query>"     →  YouTube URL
+mpv --input-ipc-server        →  stream audio (cross-platform)
+socat / nc -U (IPC fallback)  →  pause/vol control
+SIGSTOP/SIGCONT               →  pause fallback on Termux/RPi
+ffmpeg filter_complex         →  mix / trim
+Suno API                      →  AI song generation
+Lyria RealTime API            →  live AI music stream
+scdl / yt-dlp                 →  SoundCloud / Bandcamp
+```
 
-| Project | What | By |
-|---------|------|----|
-| [OpenVoiceUI](https://github.com/MCERQUA/OpenVoiceUI-public) | Web voice interface — animated face, Suno, music player | [@MetaMikeC](https://github.com/MCERQUA) |
-| **pi-dj** (this) | CLI version — terminal, Lyria streams, samples, cliamp | [@arosstale](https://github.com/arosstale) |
+## vs pi-amp
 
-Both connect to the same AI music generation layer. OpenVoiceUI runs in your browser on a VPS. pi-dj runs in your terminal via pi.
-
----
-
-## Built on
-
-- [Lyria RealTime](https://ai.google.dev/gemini-api/docs/music-generation) — Google's live music generation
-- [Suno](https://suno.com) — AI song generation
-- [OpenVoiceUI](https://github.com/MCERQUA/OpenVoiceUI-public) — web voice UI companion
-- [cliamp](https://github.com/bjarneo/cliamp) — Terminal Winamp
-- [scdl](https://github.com/flyingrub/scdl) — SoundCloud downloader
-- [yt-dlp](https://github.com/yt-dlp/yt-dlp) — Bandcamp/YouTube downloader
-- [Space DJ](https://magenta.withgoogle.com/spacedj-announce) — Google Magenta inspiration
+| Feature | pi-amp | **pi-dj** |
+|---------|--------|-----------|
+| YouTube streaming | ✅ | ✅ |
+| **Windows** | ❌ | ✅ |
+| **macOS** | partial | ✅ |
+| **Termux / Android** | ❌ | ✅ |
+| **Raspberry Pi** | ❌ | ✅ |
+| **AI generation (Suno)** | ❌ | ✅ |
+| **AI streaming (Lyria)** | ❌ | ✅ |
+| **SoundCloud download** | ❌ | ✅ |
+| **Bandcamp download** | ❌ | ✅ |
+| **Mix / crossfade** | ❌ | ✅ |
+| **Trim** | ❌ | ✅ |
+| **BPM detection** | ❌ | ✅ |
+| **IPC fallback (nc)** | ❌ | ✅ |
+| **Config file** | ❌ | ✅ |
+| EQ presets | ✅ PipeWire | planned |
+| Status bar | ✅ | ✅ |
+| LLM tools | ✅ | ✅ |
 
 ## License
 
-MIT — by [71tick / arosstale](https://dj-piguy.com) | [dj-piguy.com](https://dj-piguy.com)
+MIT

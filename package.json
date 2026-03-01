@@ -1,11 +1,31 @@
 {
   "name": "pi-dj",
   "version": "1.0.0",
-  "description": "Full AI music suite for pi — Lyria RealTime, Suno generation, SoundCloud/Bandcamp downloads, Space DJ galaxy, cliamp playback",
-  "keywords": ["pi", "music", "lyria", "suno", "cliamp", "soundcloud", "bandcamp", "ai", "dj"],
+  "description": "AI music production suite for pi — YouTube streaming, Suno generation, Lyria RealTime, SoundCloud/Bandcamp, mix, trim, BPM. Windows + macOS + Linux.",
+  "keywords": [
+    "pi",
+    "music",
+    "player",
+    "youtube",
+    "streaming",
+    "lyria",
+    "suno",
+    "soundcloud",
+    "bandcamp",
+    "ai",
+    "dj",
+    "crossplatform"
+  ],
   "author": "71tick",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/arosstale/pi-dj"
+  },
   "pi": {
     "extensions": ["extensions/pi-dj.ts"]
+  },
+  "dependencies": {
+    "@sinclair/typebox": "^0.34.0"
   }
 }
