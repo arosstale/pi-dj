@@ -1,7 +1,7 @@
 {
   "name": "pi-dj",
-  "version": "1.1.0",
-  "description": "AI music production suite for pi — YouTube streaming, Suno generation, Lyria RealTime, SoundCloud/Bandcamp, mix, trim, BPM. Windows + macOS + Linux.",
+  "version": "1.2.0",
+  "description": "AI music suite for pi — YouTube, global radio (30k+ stations), Suno, Lyria AI, SoundCloud/Bandcamp, mix, trim, BPM. Windows + macOS + Linux + Termux.",
   "keywords": [
     "pi-package",
     "pi",
@@ -18,7 +18,10 @@
     "dj",
     "crossplatform",
     "termux",
-    "raspberry-pi"
+    "raspberry-pi",
+    "radio",
+    "internet-radio",
+    "mpv"
   ],
   "author": "71tick",
   "license": "MIT",
