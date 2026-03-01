@@ -10,7 +10,7 @@
  *   Termux:   pkg install mpv ffmpeg python; pip install yt-dlp
  *
  * Commands:
- *   /play <query|path>   — YouTube search, URL, playlist, or local file
+ *   /dj-play <query|path> — YouTube search, URL, playlist, or local file
  *   /pause               — Toggle pause
  *   /stop                — Stop playback + clear queue
  *   /np                  — Now playing
@@ -19,9 +19,9 @@
  *   /skip                — Skip track
  *   /repeat              — Toggle loop current track
  *   /search <query>      — Search without playing, show results
- *   /music [dir]         — Browse local music library
+ *   /dj-lib [dir]        — Browse local music library
  *   /history             — Recently played tracks
- *   /viz [file]          — Terminal audio visualizer
+ *   /dj-viz [file]       — Terminal audio visualizer
  *   /generate <prompt>   — Suno AI song generation
  *   /dj [1-9]            — Lyria RealTime AI stream
  *   /sc <url>            — SoundCloud download
@@ -30,6 +30,9 @@
  *   /trim <f> <s> [e]    — Trim audio clip
  *   /bpm <file>          — Detect BPM
  *   /dj-help             — All commands + system status
+ *
+ * Note: /play and /music are owned by cliamp (local TUI player).
+ *       /dj-play handles YouTube/URL streaming via mpv.
  */
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
@@ -411,8 +414,8 @@ export default function piDj(pi: ExtensionAPI) {
   });
 
   // ── /play ──────────────────────────────────────────────────────────────
-  pi.registerCommand("play", {
-    description: "Play music — YouTube search, URL, playlist, or local file. /play <query|path>",
+  pi.registerCommand("dj-play", {
+    description: "Stream music via mpv — YouTube search, URL, or playlist. /dj-play <query|url>",
     handler: async (args, ctx) => {
       const query = args?.trim();
 
@@ -587,8 +590,8 @@ export default function piDj(pi: ExtensionAPI) {
   });
 
   // ── /music ─────────────────────────────────────────────────────────────
-  pi.registerCommand("music", {
-    description: "Browse local music library. /music [subdirectory]",
+  pi.registerCommand("dj-lib", {
+    description: "Browse local music library. /dj-lib [subdirectory]",
     handler: async (args, ctx) => {
       const sub = args?.trim();
       const dir = sub ? join(musicDir, sub) : musicDir;
@@ -655,8 +658,8 @@ export default function piDj(pi: ExtensionAPI) {
   });
 
   // ── /viz ───────────────────────────────────────────────────────────────
-  pi.registerCommand("viz", {
-    description: "Terminal audio visualizer. /viz [file]",
+  pi.registerCommand("dj-viz", {
+    description: "Terminal audio visualizer. /dj-viz [file]",
     handler: async (args, ctx) => {
       const file = args?.trim();
       ctx.ui.notify("🎨 Starting visualizer...", "info");
@@ -839,8 +842,8 @@ export default function piDj(pi: ExtensionAPI) {
         `🎧 pi-dj — ${platform}\n\n` +
         `mpv ${ok(t.mpv)}  yt-dlp ${ok(t.ytdlp)}  ffmpeg ${ok(t.ffmpeg)}  scdl ${ok(t.scdl)}\n` +
         `IPC: ${ipcMethod}  Music: ${musicDir}\n\n` +
-        `PLAYBACK\n` +
-        `/play <query|path>   YouTube search, URL, playlist, or file\n` +
+        `STREAMING (mpv / YouTube)\n` +
+        `/dj-play <query|url> YouTube search, URL, or playlist\n` +
         `/pause               Toggle pause\n` +
         `/stop                Stop + clear queue\n` +
         `/np                  Now playing\n` +
@@ -850,8 +853,12 @@ export default function piDj(pi: ExtensionAPI) {
         `/repeat              Toggle loop\n` +
         `/search <query>      Search without playing\n` +
         `/history             Recently played\n` +
-        `/music [dir]         Browse local library\n` +
-        `/viz [file]          Terminal visualizer\n\n` +
+        `/dj-lib [dir]        Browse local library\n` +
+        `/dj-viz [file]       Terminal visualizer\n` +
+        `\n` +
+        `LOCAL FILES → use /play (cliamp TUI)\n` +
+        `/play [path]         Open cliamp player (EQ, keys, Winamp UI)\n` +
+        `/music               Play ~/Music in cliamp\n\n` +
         `AI MUSIC\n` +
         `/generate <prompt>   Suno AI song\n` +
         `/dj [1-9]            Lyria RealTime stream\n\n` +
@@ -870,9 +877,9 @@ export default function piDj(pi: ExtensionAPI) {
 
   // ── LLM tools ──────────────────────────────────────────────────────────
   pi.registerTool({
-    name: "play_music",
-    label: "Play Music",
-    description: "Search YouTube and play music, or play a local file. Works on Windows, macOS, Linux, Termux, Raspberry Pi.",
+    name: "dj_play_music",
+    label: "DJ Play Music",
+    description: "Search YouTube and stream music via mpv. For local files use play_music (cliamp) instead. Works on Windows, macOS, Linux, Termux, Raspberry Pi.",
     parameters: Type.Object({
       query: Type.String({ description: "Search query, YouTube URL, playlist URL, or local file path" }),
     }),
@@ -896,9 +903,9 @@ export default function piDj(pi: ExtensionAPI) {
   });
 
   pi.registerTool({
-    name: "queue_music",
-    label: "Queue Music",
-    description: "Add a track to the playback queue.",
+    name: "dj_queue_music",
+    label: "DJ Queue Music",
+    description: "Add a YouTube/URL track to the mpv playback queue.",
     parameters: Type.Object({
       query: Type.String({ description: "Search query or YouTube URL" }),
     }),
