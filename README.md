@@ -102,10 +102,24 @@ The whole workflow — idea to published track — runs inside pi.
 
 ---
 
+## Ecosystem
+
+pi-dj is the **CLI companion** to [OpenVoiceUI](https://github.com/MCERQUA/OpenVoiceUI-public) — a browser-based voice agent platform with animated face, music player, Suno integration, and web canvas display built by [@MetaMikeC](https://github.com/MCERQUA).
+
+| Project | What | By |
+|---------|------|----|
+| [OpenVoiceUI](https://github.com/MCERQUA/OpenVoiceUI-public) | Web voice interface — animated face, Suno, music player | [@MetaMikeC](https://github.com/MCERQUA) |
+| **pi-dj** (this) | CLI version — terminal, Lyria streams, samples, cliamp | [@arosstale](https://github.com/arosstale) |
+
+Both connect to the same AI music generation layer. OpenVoiceUI runs in your browser on a VPS. pi-dj runs in your terminal via pi.
+
+---
+
 ## Built on
 
 - [Lyria RealTime](https://ai.google.dev/gemini-api/docs/music-generation) — Google's live music generation
-- [Suno](https://suno.com) — AI song generation  
+- [Suno](https://suno.com) — AI song generation
+- [OpenVoiceUI](https://github.com/MCERQUA/OpenVoiceUI-public) — web voice UI companion
 - [cliamp](https://github.com/bjarneo/cliamp) — Terminal Winamp
 - [scdl](https://github.com/flyingrub/scdl) — SoundCloud downloader
 - [yt-dlp](https://github.com/yt-dlp/yt-dlp) — Bandcamp/YouTube downloader
@@ -113,4 +127,4 @@ The whole workflow — idea to published track — runs inside pi.
 
 ## License
 
-MIT — by [71tick](https://dj-piguy.com) | [dj-piguy.com](https://dj-piguy.com)
+MIT — by [71tick / arosstale](https://dj-piguy.com) | [dj-piguy.com](https://dj-piguy.com)
