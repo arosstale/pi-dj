@@ -1,4 +1,4 @@
-import { Composition } from 'remotion';
+import { Composition, registerRoot } from 'remotion';
 import { MusicVideo } from './MusicVideo';
 
 export const RemotionRoot = () => (
@@ -20,3 +20,5 @@ export const RemotionRoot = () => (
     />
   </>
 );
+
+registerRoot(RemotionRoot);
