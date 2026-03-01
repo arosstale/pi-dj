@@ -21,7 +21,7 @@
  *   /sc <url>             — download SoundCloud → MP3
  *   /bandcamp <url>       — download Bandcamp → MP3
  *   /bandlab <url>        — download BandLab track/album/collection → MP3
- *   /render <file|url> [style] — render music video with Remotion (bars|wave|circle)
+ *   /render <file|url> [style] — render music video with ffmpeg (bars|wave|circle|cqt)
  *   /mix <a> <b> [s]      — crossfade two tracks with ffmpeg
  *   /trim <f> <s> [e]     — trim audio clip
  *   /bpm <file>           — detect BPM
@@ -567,40 +567,45 @@ export default function piDj(pi: ExtensionAPI) {
     },
   });
 
-  // ── /render — Remotion music video ───────────────────────────────────
+  // ── /render — ffmpeg music video (bars|wave|circle|cqt) ─────────────
   pi.registerCommand("render", {
-    description: "Render a music video with Remotion. /render <audio-file> [bars|wave|circle]",
+    description: "Render a music video with ffmpeg. /render <file|url> [bars|wave|circle|cqt]",
     handler: async (args, ctx) => {
       const parts = (args?.trim() || "").split(/\s+/);
       const [audioArg, styleArg = "bars"] = parts;
+      const STYLES = ["bars", "wave", "circle", "cqt"];
+
       if (!audioArg) {
         ctx.ui.notify(
           "Usage: /render <audio-file|youtube-url> [style]\n\n" +
           "Styles:\n" +
-          "  bars   — FFT spectrum bars (default)\n" +
-          "  wave   — scrolling waveform\n" +
-          "  circle — radial spectrum ring\n\n" +
+          "  bars   — scrolling FFT spectrum (default)\n" +
+          "  wave   — waveform lines\n" +
+          "  circle — L/R vectorscope Lissajous\n" +
+          "  cqt    — piano-roll CQT (best looking)\n\n" +
           "Examples:\n" +
           "  /render ~/Music/track.mp3\n" +
-          "  /render ~/Music/track.mp3 circle\n" +
-          "  /render https://youtu.be/xxx bars",
+          "  /render ~/Music/track.mp3 cqt\n" +
+          "  /render https://youtu.be/xxx circle",
           "info"
         );
         return;
       }
-      if (!["bars", "wave", "circle"].includes(styleArg)) {
-        ctx.ui.notify(`Unknown style "${styleArg}". Use: bars | wave | circle`, "warning"); return;
+      if (!STYLES.includes(styleArg)) {
+        ctx.ui.notify(`Unknown style "${styleArg}". Use: ${STYLES.join(" | ")}`, "warning"); return;
       }
+      if (!tools.ffmpeg) { ctx.ui.notify(`ffmpeg not found. ${installHint()}`, "warning"); return; }
 
-      // Resolve: if it's a URL, download first
+      // Resolve: if URL, download audio first
       let audioFile = audioArg;
       if (/^https?:\/\//.test(audioArg)) {
         if (!tools.ytdlp) { ctx.ui.notify("yt-dlp required for URL. pip install yt-dlp", "warning"); return; }
-        const outDir = join(musicDir, "Videos");
-        ctx.ui.notify(`⬇️ Downloading audio for render...`, "info");
+        ctx.ui.notify("⬇️ Downloading audio...", "info");
         try {
           const dlOut = execSync(
-            `${ytdlpBin()} -x --audio-format mp3 --audio-quality 0 -o "${outDir}/%(title)s.%(ext)s" --print after_move:filepath "${audioArg}" 2>/dev/null`,
+            `${ytdlpBin()} -x --audio-format mp3 --audio-quality 0` +
+            ` -o "${join(musicDir, "Videos")}/%(title)s.%(ext)s"` +
+            ` --print after_move:filepath "${audioArg}" 2>/dev/null`,
             { encoding: "utf-8", timeout: 120000 }
           ).trim().split(/\r?\n/).pop() || "";
           if (!dlOut || !existsSync(dlOut)) { ctx.ui.notify("Download failed", "error"); return; }
@@ -609,31 +614,51 @@ export default function piDj(pi: ExtensionAPI) {
           ctx.ui.notify(`Download failed: ${String(e.message).slice(0, 200)}`, "error"); return;
         }
       } else {
-        // Expand ~ manually (Windows-safe)
         audioFile = audioFile.replace(/^~/, HOME);
         if (!existsSync(audioFile)) { ctx.ui.notify(`File not found: ${audioFile}`, "warning"); return; }
       }
 
-      // Resolve extension dir → repo root → remotion/render.mjs
+      // Font — bundled in assets/ next to this extension
       const extDir = (typeof import.meta !== "undefined" && (import.meta as any).url)
         ? dirname(fileURLToPath((import.meta as any).url))
         : __dirname;
-      const renderScript = join(extDir, "..", "remotion", "render.mjs");
-      if (!existsSync(renderScript)) {
-        ctx.ui.notify(`Remotion renderer not found at:\n${renderScript}`, "error"); return;
-      }
+      const fontB = join(extDir, "..", "assets", "Inter-Bold.ttf").replace(/\\/g, "/").replace(/^\/([a-z])\//i, "$1:/");
+      const fontR = join(extDir, "..", "assets", "Inter-Regular.ttf").replace(/\\/g, "/").replace(/^\/([a-z])\//i, "$1:/");
 
-      const outFile = join(musicDir, "Videos",
-        `${basename(audioFile, extname(audioFile))}_${styleArg}.mp4`);
+      // Extract title/artist from filename: "Artist - Title.mp3" or "Title.mp3"
+      const stem = basename(audioFile, extname(audioFile));
+      const [titlePart, artistPart] = stem.includes(" - ")
+        ? [stem.split(" - ").slice(1).join(" - "), stem.split(" - ")[0]]
+        : [stem, ""];
 
-      ctx.ui.notify(`🎬 Rendering ${styleArg} video...\nThis takes a few minutes.`, "info");
+      // Escape text for ffmpeg drawtext (: and ' are special)
+      const esc = (s: string) => s.replace(/'/g, "\u2019").replace(/:/g, "\\:").replace(/\[/g, "\\[").replace(/\]/g, "\\]");
+      const title  = esc(titlePart.slice(0, 50));
+      const artist = esc(artistPart.slice(0, 40));
 
+      const outFile = join(musicDir, "Videos", `${stem}_${styleArg}.mp4`);
+      mkdirSync(join(musicDir, "Videos"), { recursive: true });
+
+      // Build ffmpeg filtergraph per style
+      const textOverlay =
+        `drawtext=text='${title}':fontfile='${fontB}':fontsize=64:fontcolor=white:x=60:y=60:shadowcolor=black:shadowx=2:shadowy=2` +
+        (artist ? `,drawtext=text='${artist}':fontfile='${fontR}':fontsize=26:fontcolor=0x888888:x=60:y=138:shadowcolor=black:shadowx=1:shadowy=1` : "");
+
+      const filters: Record<string, string> = {
+        bars:   `[0:a]showspectrum=s=1080x1080:mode=combined:color=rainbow:scale=cbrt:slide=scroll[v];[v]${textOverlay}[out]`,
+        wave:   `[0:a]showwaves=s=1080x1080:mode=cline:scale=sqrt:colors=0x5566ff|0xaa44ff:draw=full[v];[v]${textOverlay}[out]`,
+        circle: `[0:a]avectorscope=s=1080x1080:zoom=2:draw=line:scale=sqrt:rc=0:gc=200:bc=255:rf=0:gf=40:bf=80[v];[v]${textOverlay}[out]`,
+        cqt:    `[0:a]showcqt=s=1080x1080:count=6:csp=bt709:bar_g=2:sono_g=4[v];[v]${textOverlay}[out]`,
+      };
+
+      ctx.ui.notify(`🎬 Rendering ${styleArg}...\n${basename(outFile)}`, "info");
       try {
         execSync(
-          `node "${renderScript}" --audio "${audioFile}" --style ${styleArg} --out "${outFile}"`,
-          { encoding: "utf-8", timeout: 600000, stdio: "inherit" }
+          `ffmpeg -y -i "${audioFile}" -filter_complex "${filters[styleArg]}"` +
+          ` -map "[out]" -map 0:a -c:v libx264 -preset fast -crf 18 -c:a aac -b:a 192k -shortest "${outFile}"`,
+          { encoding: "utf-8", timeout: 600000 }
         );
-        ctx.ui.notify(`✅ Video saved:\n${outFile}`, "success");
+        ctx.ui.notify(`✅ Saved: ${basename(outFile)}`, "success");
       } catch (e: any) {
         ctx.ui.notify(`Render failed: ${String(e.message || e).slice(0, 300)}`, "error");
       }
@@ -666,7 +691,7 @@ export default function piDj(pi: ExtensionAPI) {
         `/bandcamp <url>       Bandcamp → MP3\n` +
         `/bandlab <url>        BandLab track/album/collection → MP3\n\n` +
         `PRODUCTION\n` +
-        `/render <f> [style]   music video (bars|wave|circle) via Remotion\n` +
+        `/render <f> [style]   music video via ffmpeg (bars|wave|circle|cqt)\n` +
         `/mix <a> <b> [s]      crossfade with ffmpeg\n` +
         `/trim <f> <s> [e]     trim clip\n` +
         `/bpm <file>           detect BPM\n\n` +
