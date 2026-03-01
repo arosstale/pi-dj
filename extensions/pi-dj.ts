@@ -67,6 +67,11 @@ function getMusicDir(cfg: DjConfig): string {
 
 // ── Tool detection ────────────────────────────────────────────────────────
 function which(cmd: string): string | null {
+  // On Windows, also check ~/bin/<cmd>.exe since cmd.exe PATH ≠ Git Bash PATH
+  if (IS_WIN) {
+    const local = join(HOME, "bin", cmd + ".exe");
+    if (existsSync(local)) return local;
+  }
   try {
     return execSync(
       IS_WIN ? `where "${cmd}" 2>nul` : `command -v "${cmd}" 2>/dev/null`,
