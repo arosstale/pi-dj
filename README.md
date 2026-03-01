@@ -1,40 +1,48 @@
 # pi-dj 🎧
 
-Full AI music suite for [pi](https://github.com/badlogic/pi-mono) — way deeper than just YouTube streaming.
+> The CLI that powers [dj-piguy.com](https://dj-piguy.com) — an AI radio station built entirely inside [pi](https://github.com/badlogic/pi-mono).
 
-![pi-dj](https://dj-piguy.com/covers/hero/ai-jam-reggae.webp)
+Full AI music suite for pi. Generate, stream, sample, download, and publish music — all from your terminal.
 
-## What it does
+## Demo
 
-| Command | What |
-|---------|------|
-| `/dj [1-9]` | **Lyria RealTime** live AI music stream — 9 presets |
-| `/spacedj` | **Space DJ** — fly through a 3D genre galaxy, Lyria blends nearby sounds |
-| `/generate [prompt]` | **Suno AI** song generation + auto-play with cliamp |
-| `/sample` | Record Lyria stream to MP3 |
-| `/sc [url]` | Download from **SoundCloud** |
-| `/bandcamp [url]` | Download from **Bandcamp** |
-| `/play [path]` | Play local library with **cliamp** |
-| `/dj-status` | Library stats — songs, disk, active downloads |
+🎵 **[dj-piguy.com](https://dj-piguy.com)** — 32+ AI-generated tracks, live radio, built with this extension.
 
 ## Install
 
 ```bash
-pi install git:github.com/71tick/pi-dj
+pi install git:github.com/arosstale/pi-dj
 ```
 
 ### Requirements
 
-- **cliamp** — [github.com/bjarneo/cliamp](https://github.com/bjarneo/cliamp) (Terminal Winamp)
-- **scdl** — `uv tool install scdl` (SoundCloud downloader)
-- **yt-dlp** — `uv tool install yt-dlp` (Bandcamp downloader)
-- **Gemini API key** — free at [aistudio.google.com](https://aistudio.google.com/apikey) (for Lyria)
-- **Suno API key** — [sunoapi.org](https://sunoapi.org) (for AI generation)
+- **[cliamp](https://github.com/bjarneo/cliamp)** — Terminal Winamp player
+- **scdl** — `uv tool install scdl`
+- **yt-dlp** — `uv tool install yt-dlp`
+- **Gemini API key** — free at [aistudio.google.com](https://aistudio.google.com/apikey)
+- **Suno API key** — [sunoapi.org](https://sunoapi.org)
 
 ```bash
 export GEMINI_API_KEY="your-key"
 export SUNO_API_KEY="your-key"
 ```
+
+---
+
+## Commands
+
+| Command | What |
+|---------|------|
+| `/dj [1-9]` | **Lyria RealTime** live AI stream — 9 presets |
+| `/spacedj` | **Space DJ** — fly a 3D genre galaxy, Lyria blends sounds live |
+| `/generate [prompt]` | **Suno** AI song + auto-play with cliamp |
+| `/sample` | Record Lyria stream → MP3 |
+| `/sc [url]` | Download from SoundCloud |
+| `/bandcamp [url]` | Download from Bandcamp |
+| `/play [path]` | Play local library with cliamp |
+| `/dj-status` | Library stats |
+
+---
 
 ## Lyria Presets
 
@@ -50,7 +58,9 @@ export SUNO_API_KEY="your-key"
 9 = Afrobeats       100 bpm   percussion, tropical, rhythmic
 ```
 
-Inside the stream: type **1-9** to switch presets, **p** pause, **r** resume, **q** quit, or type any custom prompt.
+Inside `/dj`: type **1-9** to switch, **p** pause, **r** resume, **q** quit, or type any custom prompt.
+
+---
 
 ## Space DJ
 
@@ -58,31 +68,37 @@ Inside the stream: type **1-9** to switch presets, **p** pause, **r** resume, **
 /spacedj
 ```
 
-Fly through a 3D galaxy of 20+ genres. Arrow keys move your ship. Lyria blends the nearby genres in real-time — land between Trap and Soul Flip for a Carmack zone, drift toward Ambient for chill mode.
+Fly through a 3D galaxy of genres. Arrow keys move your ship. Lyria blends nearby genres in real-time. Land between Trap and Soul Flip for a Carmack zone. Space = autopilot.
 
-Space = autopilot (random drift), q = quit.
+Inspired by [Google Magenta's Space DJ](https://magenta.withgoogle.com/spacedj-announce).
 
-## Examples
+---
+
+## How dj-piguy.com was built
+
+Every track on [dj-piguy.com](https://dj-piguy.com) was generated using pi + Suno:
 
 ```
-/dj 1                              # Stream Carmack Core
-/dj                                # Same (default)
-/generate carmack trap soul beat   # Make a Suno track
-/sc https://soundcloud.com/71tick/likes   # Download your likes
-/bandcamp https://mrcarmack.bandcamp.com/music
-/play E:\Music\SoundCloud          # Play your library
-/dj-status                         # Check everything
+/generate volcanic bassline hip hop beat heavy 808s
+→ Suno generates 2 variants
+→ cliamp plays them back  
+→ pick the best one
+→ publish to dj-piguy.com
 ```
+
+The whole workflow — idea to published track — runs inside pi.
+
+---
 
 ## Built on
 
-- [Lyria RealTime](https://ai.google.dev/gemini-api/docs/music-generation) — Google's live music generation API
-- [Suno](https://suno.com) — AI song generation
-- [cliamp](https://github.com/bjarneo/cliamp) — Terminal Winamp player
+- [Lyria RealTime](https://ai.google.dev/gemini-api/docs/music-generation) — Google's live music generation
+- [Suno](https://suno.com) — AI song generation  
+- [cliamp](https://github.com/bjarneo/cliamp) — Terminal Winamp
 - [scdl](https://github.com/flyingrub/scdl) — SoundCloud downloader
 - [yt-dlp](https://github.com/yt-dlp/yt-dlp) — Bandcamp/YouTube downloader
-- [Space DJ](https://magenta.withgoogle.com/spacedj-announce) — Inspired by Google Magenta's Space DJ
+- [Space DJ](https://magenta.withgoogle.com/spacedj-announce) — Google Magenta inspiration
 
 ## License
 
-MIT — by [71tick](https://dj-piguy.com)
+MIT — by [71tick](https://dj-piguy.com) | [dj-piguy.com](https://dj-piguy.com)
