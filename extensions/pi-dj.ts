@@ -28,7 +28,7 @@
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
-import { execSync, execFileSync, spawn, type ChildProcess } from "node:child_process";
+import { execSync, spawn, type ChildProcess } from "node:child_process";
 import { existsSync, readFileSync, mkdirSync } from "node:fs";
 import { homedir, platform, tmpdir } from "node:os";
 import { join, basename } from "node:path";
@@ -126,11 +126,13 @@ function fmt(s: number): string {
 }
 
 async function updateStatus() {
-  if (!statusCtx || !isPlaying || !currentTrack.title) {
-    statusCtx?.ui.setStatus("pi-dj", statusCtx?.ui.theme.fg("dim", "🎵 stopped"));
+  if (!statusCtx) return;
+  if (!isPlaying || !currentTrack.title) {
+    statusCtx.ui.setStatus("pi-dj", statusCtx.ui.theme.fg("dim", "🎵 stopped"));
     return;
   }
-  const pos   = ipcReady ? await mpvGet("time-pos") : null;
+  // Only make IPC call when actually playing
+  const pos = ipcReady ? await mpvGet("time-pos") : null;
   const theme = statusCtx.ui.theme;
   const icon  = isPaused ? "⏸" : isLooping ? "🔁" : "▶";
   const color = isPaused ? "warning" : "success";
@@ -215,15 +217,18 @@ async function playTrack(url: string, title?: string): Promise<string> {
     else updateStatus();
   });
 
-  // Wait for IPC
-  for (let i = 0; i < 25; i++) {
-    await new Promise(r => setTimeout(r, 300));
+  // Wait for IPC socket (poll fast, give up after 5s)
+  for (let i = 0; i < 50; i++) {
+    await new Promise(r => setTimeout(r, 100));
     if (existsSync(IPC_PATH)) { ipcReady = true; break; }
   }
+  // Query duration once stream loads (retry a few times — mpv may not have it immediately)
   if (ipcReady) {
-    await new Promise(r => setTimeout(r, 800));
-    const d = await mpvGet("duration");
-    cachedDur = d ? parseFloat(d) : 0;
+    for (let i = 0; i < 10; i++) {
+      await new Promise(r => setTimeout(r, 200));
+      const d = await mpvGet("duration");
+      if (d) { cachedDur = parseFloat(d); break; }
+    }
   }
   updateStatus();
   return title;
@@ -235,19 +240,6 @@ async function togglePause() {
     try { process.kill(mpvPid, isPaused ? "SIGCONT" : "SIGSTOP"); isPaused = !isPaused; } catch {}
   }
 }
-
-// ── Lyria presets ─────────────────────────────────────────────────────────
-const PRESETS: Record<string, { name: string; bpm: number }> = {
-  "1": { name: "Carmack Core",  bpm: 90  },
-  "2": { name: "Chill",         bpm: 75  },
-  "3": { name: "Hard",          bpm: 140 },
-  "4": { name: "Soul Flip",     bpm: 85  },
-  "5": { name: "Chaos",         bpm: 110 },
-  "6": { name: "Jersey Club",   bpm: 140 },
-  "7": { name: "Soulection",    bpm: 88  },
-  "8": { name: "Drill",         bpm: 145 },
-  "9": { name: "Afrobeats",     bpm: 100 },
-};
 
 // ── Extension ─────────────────────────────────────────────────────────────
 export default function piDj(pi: ExtensionAPI) {
@@ -264,7 +256,7 @@ export default function piDj(pi: ExtensionAPI) {
       scdl:   which("scdl"),
       python: which("python3") || which("python"),
     };
-    for (const sub of ["Lyria","Suno","SoundCloud","Bandcamp"])
+    for (const sub of ["Lyria","Suno","SoundCloud","Bandcamp","Videos"])
       try { mkdirSync(join(musicDir, sub), { recursive: true }); } catch {}
     updateStatus();
     if (statusInterval) clearInterval(statusInterval);
@@ -471,7 +463,6 @@ export default function piDj(pi: ExtensionAPI) {
       if (!a || !b) { ctx.ui.notify("Usage: /mix <track-a> <track-b> [crossfade-secs]", "warning"); return; }
       if (!tools.ffmpeg) { ctx.ui.notify(`ffmpeg not found. ${installHint()}`, "warning"); return; }
       const out = join(musicDir, "Lyria", `mix_${Date.now()}.mp3`);
-      mkdirSync(join(musicDir, "Lyria"), { recursive: true });
       ctx.ui.notify(`🎚️ Crossfading ${xfade}s...`, "info");
       try {
         execSync(
@@ -494,7 +485,6 @@ export default function piDj(pi: ExtensionAPI) {
       if (!file) { ctx.ui.notify("Usage: /trim <file> <start> [end] (seconds)", "warning"); return; }
       if (!tools.ffmpeg) { ctx.ui.notify(`ffmpeg not found. ${installHint()}`, "warning"); return; }
       const out = join(musicDir, "Lyria", `trim_${Date.now()}.mp3`);
-      mkdirSync(join(musicDir, "Lyria"), { recursive: true });
       ctx.ui.notify(`✂️ Trimming ${start}s${end ? `–${end}s` : "+"}...`, "info");
       try {
         execSync(
