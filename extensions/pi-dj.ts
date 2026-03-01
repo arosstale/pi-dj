@@ -19,10 +19,21 @@ const LYRIA_CLI   = "node C:/Users/Artale/Music/lyria-cli/index.js";
 const SPACEDJ_CLI = "node C:/Users/Artale/Music/lyria-cli/spacedj.js";
 const CLIAMP      = "cliamp.exe";
 
-const SC_PATH      = "E:/Music/SoundCloud";
-const BC_PATH      = "E:/Music/Bandcamp";
-const SUNO_PATH    = "C:/Users/Artale/Music/Suno";
-const SAMPLES_PATH = "C:/Users/Artale/Music/Samples";
+const SC_PATH       = "E:/Music/SoundCloud";
+const SC_PATH_C     = "C:/Users/Artale/Music/SoundCloud";
+const BC_PATH       = "E:/Music/Bandcamp";
+const SUNO_PATH     = "C:/Users/Artale/Music/Suno";
+const SAMPLES_PATH  = "C:/Users/Artale/Music/Samples";
+const MUSIC_2026    = "C:/Users/Artale/Music/Music/2026";
+
+const LIBRARIES: Record<string, { path: string; label: string; emoji: string }> = {
+  "1": { path: "E:/Music/SoundCloud",               label: "SoundCloud (34GB)",   emoji: "☁️"  },
+  "2": { path: "C:/Users/Artale/Music/SoundCloud",  label: "SoundCloud overflow", emoji: "☁️"  },
+  "3": { path: "E:/Music/Bandcamp",                 label: "Bandcamp (441MB)",    emoji: "🎸"  },
+  "4": { path: "C:/Users/Artale/Music/Suno",        label: "Suno AI (115MB)",     emoji: "🤖"  },
+  "5": { path: "C:/Users/Artale/Music/Music/2026",  label: "2026 Collection",     emoji: "📀"  },
+  "6": { path: "C:/Users/Artale/Music/Samples",     label: "Lyria Samples",       emoji: "🎛️"  },
+};
 
 const PRESETS: Record<string, { name: string; bpm: number }> = {
   "1": { name: "Carmack Core",  bpm: 90  },
@@ -158,6 +169,60 @@ export default function piDj(pi: ExtensionAPI) {
     },
   });
 
+  // /music — smart library browser
+  pi.registerCommand("music", {
+    description: "Browse and play your full music library. Usage: /music [1-6|path]",
+    handler: async (args, ctx) => {
+      const input = args?.trim();
+
+      // No args — show library menu
+      if (!input) {
+        const menu = Object.entries(LIBRARIES)
+          .map(([k, l]) => `${l.emoji} [${k}] ${l.label}`)
+          .join("\n");
+        ctx.ui.notify(
+          `🎧 Your Music Library:\n${menu}\n\nUsage: /music [1-6] or /music [path]`,
+          "info"
+        );
+        return;
+      }
+
+      // Number — pick library
+      const lib = LIBRARIES[input];
+      if (lib) {
+        ctx.ui.notify(`${lib.emoji} Playing: ${lib.label}`, "info");
+        pi.sendUserMessage(
+          `Play music library with cliamp: interactive_shell command="${CLIAMP} ${lib.path.replace(/\//g, "\\")}" mode=interactive reason="${lib.emoji} ${lib.label}"`
+        );
+        return;
+      }
+
+      // Custom path
+      ctx.ui.notify(`🎵 Playing: ${input}`, "info");
+      pi.sendUserMessage(
+        `Play music with cliamp: interactive_shell command="${CLIAMP} ${input.replace(/\//g, "\\")}" mode=interactive`
+      );
+    },
+  });
+
+  // /video — render music video with Remotion
+  pi.registerCommand("video", {
+    description: "Render a music video with Remotion. Usage: /video [mp3 path] [title] [artist] [genre]",
+    handler: async (args, ctx) => {
+      const parts = args?.trim().split(' ') || [];
+      const audio = parts[0] || `${SUNO_PATH}/Grain_In_My_Chest_1.mp3`;
+      const title = parts.slice(1).join(' ') || 'Untitled';
+      ctx.ui.notify(`🎬 Rendering music video: "${title}"`, "info");
+      pi.sendUserMessage(
+        `Render a Remotion music video. Run: ` +
+        `node C:/Users/Artale/Projects/pi-dj/remotion/render.mjs ` +
+        `--audio "${audio}" --title "${title}" --artist "71tick" --genre "Trap Soul" ` +
+        `--out "C:/Users/Artale/Music/Videos/${title.replace(/\s+/g, '_')}.mp4" --dur 30. ` +
+        `Run in background with nohup, report when done.`
+      );
+    },
+  });
+
   // /dj-help
   pi.registerCommand("dj-help", {
     description: "Show all pi-dj commands",
@@ -165,14 +230,20 @@ export default function piDj(pi: ExtensionAPI) {
       ctx.ui.notify(
         [
           "🎧 pi-dj commands:",
-          "/dj [1-9]       Lyria live AI stream",
-          "/spacedj        Space DJ galaxy",
-          "/generate [..]  Suno AI song",
-          "/sample         Record Lyria → MP3",
-          "/sc [url]       SoundCloud download",
-          "/bandcamp [url] Bandcamp download",
-          "/play [path]    cliamp player",
-          "/dj-status      Library check",
+          "/dj [1-9]        Lyria live AI stream",
+          "/spacedj         Space DJ galaxy",
+          "/generate [...]  Suno AI song",
+          "/sample          Record Lyria → MP3",
+          "/music [1-6]     Browse & play library",
+          "/sc [url]        SoundCloud download",
+          "/bandcamp [url]  Bandcamp download",
+          "/play [path]     cliamp player",
+          "/dj-status       Library check",
+          "",
+          "Libraries:",
+          "  1 SoundCloud (34GB)   4 Suno AI",
+          "  2 SoundCloud overflow 5 2026 Collection",
+          "  3 Bandcamp            6 Lyria Samples",
         ].join("\n"),
         "info"
       );

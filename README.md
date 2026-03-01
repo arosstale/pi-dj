@@ -37,10 +37,22 @@ export SUNO_API_KEY="your-key"
 | `/spacedj` | **Space DJ** — fly a 3D genre galaxy, Lyria blends sounds live |
 | `/generate [prompt]` | **Suno** AI song + auto-play with cliamp |
 | `/sample` | Record Lyria stream → MP3 |
+| `/music [1-6]` | Browse & play your full music library |
 | `/sc [url]` | Download from SoundCloud |
 | `/bandcamp [url]` | Download from Bandcamp |
-| `/play [path]` | Play local library with cliamp |
-| `/dj-status` | Library stats |
+| `/play [path]` | Play any path with cliamp |
+| `/dj-status` | Library stats — songs, disk, downloads |
+
+### `/music` libraries
+
+```
+1 = SoundCloud (34GB)       ☁️  5600+ liked tracks
+2 = SoundCloud overflow      ☁️  extra downloads
+3 = Bandcamp (441MB)         🎸  full discographies
+4 = Suno AI (115MB)          🤖  your generated songs
+5 = 2026 Collection          📀  curated folder
+6 = Lyria Samples            🎛️  recorded AI streams
+```
 
 ---
 
