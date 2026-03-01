@@ -1,9 +1,11 @@
 {
   "name": "pi-dj",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "AI music production suite for pi — YouTube streaming, Suno generation, Lyria RealTime, SoundCloud/Bandcamp, mix, trim, BPM. Windows + macOS + Linux.",
   "keywords": [
+    "pi-package",
     "pi",
+    "pi-coding-agent",
     "music",
     "player",
     "youtube",
@@ -14,16 +16,20 @@
     "bandcamp",
     "ai",
     "dj",
-    "crossplatform"
+    "crossplatform",
+    "termux",
+    "raspberry-pi"
   ],
   "author": "71tick",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/arosstale/pi-dj"
+    "url": "git+https://github.com/arosstale/pi-dj.git"
   },
   "pi": {
-    "extensions": ["extensions/pi-dj.ts"]
+    "extensions": [
+      "extensions/pi-dj.ts"
+    ]
   },
   "dependencies": {
     "@sinclair/typebox": "^0.34.0"

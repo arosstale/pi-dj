@@ -1,0 +1,43 @@
+{
+  "title": "pi-dj improvements",
+  "description": "Pick what to fix before publishing to npm",
+  "questions": [
+    {
+      "id": "prio",
+      "type": "multi",
+      "weight": "critical",
+      "question": "What should we fix/add?",
+      "options": [
+        "🐛 Windows IPC broken — pause/vol don't work (PowerShell pipe approach is wrong)",
+        "⚡ Status bar: 3 shell execs every 3s — slow on RPi/Termux, cache locally instead",
+        "🎵 /music command missing — browse local library, gone in last rewrite",
+        "📻 Playlist support — /play <youtube playlist URL> queues all tracks",
+        "🔁 /repeat command — loop current track (mpv --loop-file)",
+        "🎨 /viz — terminal visualizer using ffplay spectrum (works on all platforms)",
+        "💾 /history — show recently played tracks",
+        "🔍 /search — search without playing, show results list first"
+      ]
+    },
+    {
+      "id": "windows_ipc",
+      "type": "single",
+      "weight": "critical",
+      "question": "Windows IPC fix — how to do pause/vol control?",
+      "options": [
+        "Node.js net.createConnection to named pipe (pure Node, no PowerShell, recommended)",
+        "Use --input-file flag with a temp script file (no IPC needed, simpler)",
+        "Skip pause on Windows entirely, just stop/restart"
+      ]
+    },
+    {
+      "id": "status",
+      "type": "single",
+      "question": "Status bar perf — fix 3 IPC calls per tick?",
+      "options": [
+        "Cache locally: track isPaused ourselves, cache duration on play start, only query time-pos",
+        "Batch query: single exec gets all 3 props at once",
+        "Leave it, fine on modern hardware"
+      ]
+    }
+  ]
+}
