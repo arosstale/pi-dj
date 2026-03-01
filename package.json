@@ -29,7 +29,8 @@
   "pi": {
     "extensions": [
       "extensions/pi-dj.ts"
-    ]
+    ],
+    "image": "https://raw.githubusercontent.com/arosstale/pi-dj/master/assets/banner.png"
   },
   "dependencies": {
     "@sinclair/typebox": "^0.34.0"

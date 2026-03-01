@@ -2,17 +2,9 @@
 
 AI music production suite for [pi](https://github.com/badlogic/pi-mono).
 
-Stream YouTube, generate AI music with Suno, live-stream Lyria RealTime, download SoundCloud & Bandcamp, mix, trim, BPM — all from the terminal.
+Stream YouTube, generate AI music with Suno, live-stream Lyria RealTime, download SoundCloud, Bandcamp & BandLab, mix, trim, BPM-detect, and render music videos — all from your terminal.
 
-## Platforms
-
-| Platform | Status |
-|----------|--------|
-| Windows (Git Bash / WSL) | ✅ |
-| macOS | ✅ |
-| Linux | ✅ |
-| Raspberry Pi | ✅ |
-| Termux (Android) | ✅ |
+![pi-dj banner](assets/banner.png)
 
 ## Install
 
@@ -20,7 +12,19 @@ Stream YouTube, generate AI music with Suno, live-stream Lyria RealTime, downloa
 pi install npm:pi-dj
 ```
 
-### Dependencies by platform
+## Platforms
+
+| Platform | Status |
+|----------|--------|
+| Windows (Git Bash) | ✅ |
+| macOS | ✅ |
+| Linux | ✅ |
+| Raspberry Pi | ✅ |
+| Termux (Android) | ✅ |
+
+## Dependencies
+
+You don't need everything — the extension detects what's installed and degrades gracefully.
 
 **Windows**
 ```bash
@@ -44,107 +48,87 @@ pip install yt-dlp
 ```bash
 pkg install mpv ffmpeg python
 pip install yt-dlp
-# Optional: better SoundCloud downloads
-pip install scdl
 ```
-
-You don't need everything — the extension detects what's installed and degrades gracefully.
 
 ## Commands
 
 ### Playback
-| Command | What it does |
+| Command | Description |
 |---------|-------------|
-| `/play <query\|path>` | YouTube search, URL, or local file |
-| `/pause` | Toggle pause |
-| `/stop` | Stop + clear queue |
-| `/np` | Now playing + queue count |
-| `/vol <0-100>` | Volume |
-| `/queue <query>` | Add track to queue |
-| `/skip` | Skip to next |
-
-### AI Music
-| Command | What it does |
-|---------|-------------|
-| `/generate <prompt>` | Generate a song with Suno AI |
-| `/dj [1-9]` | Stream live AI music with Lyria RealTime |
-
-**Lyria presets:**
-`1` Carmack Core · `2` Chill · `3` Hard · `4` Soul Flip · `5` Chaos · `6` Jersey Club · `7` Soulection · `8` Drill · `9` Afrobeats
+| `/dj-play <query\|url>` | YouTube search, URL, or playlist → stream via mpv |
+| `/pause` | Toggle pause/resume |
+| `/stop` | Stop playback + clear queue |
+| `/np` | Now playing — title, time, progress bar |
+| `/vol <0-100>` | Set volume |
+| `/skip` | Skip to next in queue |
+| `/repeat` | Toggle repeat current track |
+| `/queue <query\|url>` | Add to playback queue |
+| `/history` | Recently played tracks |
 
 ### Downloads
-| Command | What it does |
+| Command | Description |
 |---------|-------------|
-| `/sc <url>` | SoundCloud (scdl or yt-dlp fallback) |
-| `/bandcamp <url>` | Bandcamp (yt-dlp) |
+| `/sc <url>` | Download SoundCloud track → MP3 |
+| `/bandcamp <url>` | Download Bandcamp track/album → MP3 |
+| `/bandlab <url>` | Download BandLab track/album/collection → MP3 |
 
-### Production
-| Command | What it does |
+### AI Generation
+| Command | Description |
+|---------|-------------|
+| `/dj [1-9\|chill\|beats\|…]` | Lyria RealTime AI radio — live generative stream |
+
+> Requires [lyria-cli](https://github.com/cjpais/lyria-cli) installed. Delegates to cliamp's Lyria integration.
+
+### Production Tools
+| Command | Description |
 |---------|-------------|
 | `/mix <a> <b> [secs]` | Crossfade two tracks with ffmpeg |
-| `/trim <file> <start> [end]` | Trim audio clip (seconds) |
-| `/bpm <file>` | Detect BPM (librosa) |
-| `/dj-help` | All commands + tool status |
+| `/trim <file> <start> [end]` | Trim audio clip |
+| `/bpm <file>` | Detect BPM |
+| `/render <file\|url> [style]` | Render music video with ffmpeg visualizer |
 
-## AI DJ (LLM tools)
+### Render Styles
 
-pi-dj registers tools the AI can use directly:
+`/render` produces a 1080×1080 MP4 with animated visualizer + track title/artist overlay. No extra dependencies — pure ffmpeg.
 
-- *"play something chill"* → `play_music`
-- *"queue 5 ambient tracks"* → `queue_music`
+![Visualizer styles](assets/visualizers.png)
 
-## Config (optional)
-
-Create `~/.pi-dj.json`:
-
-```json
-{
-  "musicDir": "/path/to/music",
-  "sunoApiKey": "your-suno-key",
-  "googleApiKey": "your-gemini-key"
-}
-```
-
-Or env vars: `PI_DJ_MUSIC`, `SUNO_API_KEY`, `GOOGLE_API_KEY`
-
-Default music dirs:
-- Windows/macOS/Linux: `~/Music`
-- Termux: `~/storage/music`
-
-## How it works
+| Style | Filter | Description |
+|-------|--------|-------------|
+| `bars` (default) | `showspectrum` | Frequency spectrum bars |
+| `wave` | `showwaves` | Waveform |
+| `circle` | `avectorscope` | Lissajous circle |
+| `cqt` | `showcqt` | Constant-Q transform |
 
 ```
-yt-dlp "ytsearch:<query>"     →  YouTube URL
-mpv --input-ipc-server        →  stream audio (cross-platform)
-socat / nc -U (IPC fallback)  →  pause/vol control
-SIGSTOP/SIGCONT               →  pause fallback on Termux/RPi
-ffmpeg filter_complex         →  mix / trim
-Suno API                      →  AI song generation
-Lyria RealTime API            →  live AI music stream
-scdl / yt-dlp                 →  SoundCloud / Bandcamp
+/render ~/Music/track.mp3          → bars style
+/render ~/Music/track.mp3 wave     → waveform
+/render https://youtu.be/xxx cqt   → downloads first, then renders
 ```
 
-## vs pi-amp
+Output: `~/Music/Videos/<title>_<style>.mp4`
 
-| Feature | pi-amp | **pi-dj** |
-|---------|--------|-----------|
-| YouTube streaming | ✅ | ✅ |
-| **Windows** | ❌ | ✅ |
-| **macOS** | partial | ✅ |
-| **Termux / Android** | ❌ | ✅ |
-| **Raspberry Pi** | ❌ | ✅ |
-| **AI generation (Suno)** | ❌ | ✅ |
-| **AI streaming (Lyria)** | ❌ | ✅ |
-| **SoundCloud download** | ❌ | ✅ |
-| **Bandcamp download** | ❌ | ✅ |
-| **Mix / crossfade** | ❌ | ✅ |
-| **Trim** | ❌ | ✅ |
-| **BPM detection** | ❌ | ✅ |
-| **IPC fallback (nc)** | ❌ | ✅ |
-| **Config file** | ❌ | ✅ |
-| EQ presets | ✅ PipeWire | planned |
-| Status bar | ✅ | ✅ |
-| LLM tools | ✅ | ✅ |
+### Help
+| Command | Description |
+|---------|-------------|
+| `/dj-help` | Show all commands + tool availability |
+
+## LLM Tools
+
+The extension registers two tools the AI can call directly:
+
+| Tool | Description |
+|------|-------------|
+| `dj_play_music` | Stream a YouTube URL or search query |
+| `dj_queue_music` | Add a track to the queue |
+
+## Division of Labour
+
+| Extension | Owns |
+|-----------|------|
+| `cliamp` | Local files, HTTP streams, Lyria AI radio (`/play`, `/music`, `/radio`) |
+| `pi-djvj` | Terminal audio-reactive visualizer + WebGL shaders (`/viz`, `/djvj`) |
+| `pi-dj` | YouTube streaming, AI downloads, production tools (this) |
 
 ## License
 
