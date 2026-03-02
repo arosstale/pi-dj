@@ -97,6 +97,25 @@ Output: `~/Music/Videos/<title>_<style>.mp4`
 
 If a URL is passed, yt-dlp downloads first.
 
+## Terminal Visualizer (`/viz`)
+
+Audio-reactive terminal visualizer bundled as `pi-djvj`. Reacts to mpv IPC or mic.
+
+```
+/viz         — embedded in pi TUI (side panel)
+/viz full    — fullscreen alt-screen mode
+```
+
+**16 half-block shaders** (Plasma, Tunnel, Starfield, Lissajous, Kaleidoscope…) + **6 Braille modes** + **ASCII** (IBM CP437 luminance ramp). Spectral flux beat detection.
+
+| Key | Action |
+|-----|--------|
+| `N` / `P` | Next / previous shader |
+| `v` | Cycle mode (halfblock → braille → ascii) |
+| `+` / `-` | Sensitivity |
+| `F` | Toggle fullscreen |
+| `Q` | Quit |
+
 ## LLM Tools
 
 Two tools the AI can call directly mid-conversation:
@@ -111,9 +130,11 @@ Two tools the AI can call directly mid-conversation:
 
 | Extension | Commands |
 |-----------|----------|
-| `cliamp` | Local files, HTTP streams, Lyria radio — `/play` `/music` `/radio` |
-| `pi-djvj` | Terminal visualizer + WebGL shaders — `/viz` `/djvj` |
-| `pi-dj` | YouTube, AI, production — everything above |
+| `cliamp` | Local files, HTTP streams, Lyria radio — `/play` `/music` `/lyria` |
+| `pi-dj` | YouTube, AI, production, radio — `/dj-play` `/radio` `/subs` `/render` + tools |
+| `pi-djvj` | Terminal visualizer — `/viz` `/viz full` — **bundled with pi-dj** |
+
+`pi install npm:pi-dj` installs both `pi-dj` and `pi-djvj` in one shot.
 
 ## Platforms
 
