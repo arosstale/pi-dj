@@ -22,6 +22,7 @@
  *   /bandcamp <url>       — download Bandcamp → MP3
  *   /bandlab <url>        — download BandLab track/album/collection → MP3
  *   /render <file|url> [style] — render music video with ffmpeg (bars|wave|circle|cqt)
+ *   /subs <file> [style]       — transcribe + burn karaoke subtitles (whisper)
  *   /mix <a> <b> [s]      — crossfade two tracks with ffmpeg
  *   /trim <f> <s> [e]     — trim audio clip
  *   /bpm <file>           — detect BPM
@@ -694,6 +695,197 @@ export default function piDj(pi: ExtensionAPI) {
     },
   });
 
+  // ── /subs ─────────────────────────────────────────────────────────────
+  // Transcribe audio → SRT → burn as karaoke ASS subtitles into music video
+  // Pipeline: audio → ffmpeg whisper filter → .srt → convert to .ass (karaoke) → burn
+  // Uses ggml-base.en.bin (142MB) from whisper.cpp — auto-downloads if missing
+  // Windows trick: use //localhost/C$/... UNC path to avoid C: colon in ffmpeg filter options
+  pi.registerCommand("subs", {
+    description: [
+      "Transcribe + burn karaoke subtitles into a music video.",
+      "Usage: /subs <audio-or-video-file> [style]",
+      "Styles: karaoke (default) | simple | outline",
+      "Output: ~/Music/Videos/<name>_subs.mp4",
+      "",
+      "Auto-downloads ggml-base.en.bin (~142MB) if not found.",
+      "Examples:",
+      "  /subs ~/Music/track.mp3",
+      "  /subs ~/Music/Videos/track_bars.mp4 karaoke",
+    ].join("\n"),
+    handler: async (args, ctx) => {
+      const parts = (args?.trim() || "").split(/\s+/);
+      const [inputArg, styleArg = "karaoke"] = parts;
+      const STYLES = ["karaoke", "simple", "outline"];
+
+      if (!inputArg) {
+        ctx.ui.notify(
+          "Usage: /subs <audio-or-video-file> [style]\n\nStyles: karaoke | simple | outline",
+          "info"
+        );
+        return;
+      }
+      if (!STYLES.includes(styleArg)) {
+        ctx.ui.notify(`Unknown style "${styleArg}". Use: ${STYLES.join(" | ")}`, "warning"); return;
+      }
+      if (!tools.ffmpeg) { ctx.ui.notify(`ffmpeg not found. ${installHint()}`, "warning"); return; }
+
+      const inputFile = inputArg.replace(/^~/, HOME);
+      if (!existsSync(inputFile)) { ctx.ui.notify(`File not found: ${inputFile}`, "warning"); return; }
+
+      // Whisper model path — download if missing
+      const modelPath = join(HOME, "Music", "ggml-base.en.bin");
+      if (!existsSync(modelPath)) {
+        ctx.ui.notify("⬇️ Downloading whisper ggml-base.en.bin (~142MB)...", "info");
+        try {
+          execSync(
+            `curl -L -o "${modelPath}" "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin"`,
+            { timeout: 300_000, stdio: "ignore" }
+          );
+        } catch {
+          ctx.ui.notify("Download failed. Place ggml-base.en.bin in ~/Music/", "error"); return;
+        }
+      }
+
+      // Convert paths to UNC form (//localhost/C$/...) so ffmpeg's filter parser
+      // doesn't choke on the ':' in "C:/..." — colon is the filter option delimiter
+      function toUnc(p: string): string {
+        // C:/Users/... → //localhost/C$/Users/...
+        return IS_WIN ? p.replace(/^([A-Za-z]):\//, "//$1$/").replace(/\\/g, "/") : p;
+      }
+
+      const stem = basename(inputFile, extname(inputFile));
+      mkdirSync(join(musicDir, "Videos"), { recursive: true });
+      const srtPath = join(musicDir, "Videos", `${stem}.srt`);
+      const assPath = join(musicDir, "Videos", `${stem}.ass`);
+      const outFile = join(musicDir, "Videos", `${stem}_subs.mp4`);
+
+      // Step 1: transcribe → SRT
+      ctx.ui.notify("🎙️ Transcribing audio with Whisper...", "info");
+      const uncModel = toUnc(modelPath);
+      const uncSrt   = toUnc(srtPath);
+      const uncInput = toUnc(inputFile);
+      try {
+        execSync(
+          `ffmpeg -y -hide_banner -loglevel error` +
+          ` -i "${uncInput}"` +
+          ` -af "whisper=model=${uncModel}:format=srt:destination=${uncSrt}"` +
+          ` -f null -`,
+          { timeout: 300_000, encoding: "utf-8" }
+        );
+      } catch (e: any) {
+        ctx.ui.notify(`Transcription failed: ${String(e.stderr || e.message).slice(0, 200)}`, "error"); return;
+      }
+      if (!existsSync(srtPath)) { ctx.ui.notify("Whisper produced no output — try a longer file", "warning"); return; }
+
+      // Step 2: convert SRT → ASS with karaoke styling
+      const srtContent = readFileSync(srtPath, "utf-8");
+      function srtToAss(srt: string, style: string): string {
+        // ASS header
+        const styleColor = style === "karaoke" ? "&H0000FFFF" : style === "outline" ? "&H00FFFFFF" : "&H00FFFFFF";
+        const karaokeColor = "&H000080FF"; // orange highlight for karaoke
+        const header = [
+          "[Script Info]",
+          "ScriptType: v4.00+",
+          "PlayResX: 1920",
+          "PlayResY: 1080",
+          "WrapStyle: 0",
+          "",
+          "[V4+ Styles]",
+          "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
+          `Style: Default,Arial,72,${styleColor},${karaokeColor},&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,3,2,2,10,10,80,1`,
+          "",
+          "[Events]",
+          "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
+        ].join("\n");
+
+        // Parse SRT blocks
+        const events: string[] = [];
+        const blocks = srt.trim().split(/\n\n+/);
+        for (const block of blocks) {
+          const lines = block.trim().split("\n");
+          if (lines.length < 3) continue;
+          // lines[0] = index, lines[1] = timestamps, lines[2+] = text
+          const timeLine = lines[1];
+          const text = lines.slice(2).join(" ").replace(/<[^>]+>/g, ""); // strip HTML tags
+          // SRT time: 00:00:00,000 --> 00:00:02,960
+          const match = timeLine.match(/(\d+:\d+:\d+),(\d+)\s+-->\s+(\d+:\d+:\d+),(\d+)/);
+          if (!match) continue;
+          const startMs = parseInt(match[2]);
+          const endMs   = parseInt(match[4]);
+          const startAss = match[1].replace(/^0/, "").replace(":", "h").replace(":", "m") + "." + String(Math.floor(startMs / 10)).padStart(2, "0") + "s";
+          const endAss   = match[3].replace(/^0/, "").replace(":", "h").replace(":", "m") + "." + String(Math.floor(endMs / 10)).padStart(2, "0") + "s";
+
+          // For karaoke: add {\k<dur>} tags per word
+          let assText = text;
+          if (style === "karaoke") {
+            const durationCs = Math.floor((endMs - startMs) / 10); // centiseconds total
+            const words = text.split(/\s+/).filter(Boolean);
+            const perWord = words.length > 0 ? Math.floor(durationCs / words.length) : durationCs;
+            assText = words.map(w => `{\\k${perWord}}${w}`).join(" ");
+          }
+
+          events.push(`Dialogue: 0,${startAss},${endAss},Default,,0,0,0,,${assText}`);
+        }
+        return header + "\n" + events.join("\n");
+      }
+
+      const assContent = srtToAss(srtContent, styleArg);
+      const { writeFileSync } = await import("node:fs");
+      writeFileSync(assPath, assContent, "utf-8");
+
+      // Step 3: render output — burn subs onto audio visualization (bars style)
+      ctx.ui.notify(`🎬 Burning subtitles (${styleArg})...`, "info");
+      const extDir: string = (typeof __dirname !== "undefined" ? __dirname :
+        dirname(((import.meta as any)?.url ?? "").replace(/\\/g, "/"))
+      ) as string;
+      const fontB = join(extDir, "..", "assets", "Inter-Bold.ttf").replace(/\\/g, "/").replace(/^\/([a-z])\//i, "$1:/");
+      const stem2 = basename(inputFile, extname(inputFile));
+      const [titlePart, artistPart] = stem2.includes(" - ")
+        ? [stem2.split(" - ").slice(1).join(" - "), stem2.split(" - ")[0]]
+        : [stem2, ""];
+      const esc = (s: string) => s.replace(/'/g, "\u2019").replace(/:/g, "\\:").replace(/\[/g, "\\[").replace(/\]/g, "\\]");
+      const title = esc(titlePart.slice(0, 50));
+
+      // Check if input is video or audio-only
+      let hasVideo = false;
+      try {
+        const probe = execSync(`ffprobe -v error -select_streams v -show_entries stream=codec_type -of csv=p=0 "${uncInput}"`, { encoding: "utf-8", timeout: 5000 }).trim();
+        hasVideo = probe.includes("video");
+      } catch {}
+
+      const uncAss = IS_WIN ? assPath.replace(/^([A-Za-z]):\//, "//localhost/$1$/").replace(/\\/g, "/") : assPath;
+
+      try {
+        if (hasVideo) {
+          // Burn ASS onto existing video
+          execSync(
+            `ffmpeg -y -hide_banner -loglevel error` +
+            ` -i "${uncInput}"` +
+            ` -vf "ass=${uncAss.replace(/:/g, "\\:")}"` +
+            ` -c:v libx264 -preset fast -crf 20 -c:a copy "${toUnc(outFile)}"`,
+            { timeout: 600_000, encoding: "utf-8" }
+          );
+        } else {
+          // Audio-only: generate spectrum viz + burn subs
+          const vizFilter =
+            `[0:a]showspectrum=s=1920x1080:mode=combined:color=rainbow:scale=cbrt:slide=scroll[v];` +
+            `[v]drawtext=text='${title}':fontfile='${fontB}':fontsize=64:fontcolor=white:x=60:y=60:shadowcolor=black:shadowx=2:shadowy=2,` +
+            `ass=${uncAss.replace(/:/g, "\\:")}[out]`;
+          execSync(
+            `ffmpeg -y -hide_banner -loglevel error` +
+            ` -i "${uncInput}"` +
+            ` -filter_complex "${vizFilter}"` +
+            ` -map "[out]" -map 0:a -c:v libx264 -preset fast -crf 18 -c:a aac -b:a 192k -shortest "${toUnc(outFile)}"`,
+            { timeout: 600_000, encoding: "utf-8" }
+          );
+        }
+        ctx.ui.notify(`✅ Done! ${basename(outFile)}\nSRT: ${basename(srtPath)}`, "success");
+      } catch (e: any) {
+        ctx.ui.notify(`Render failed: ${String(e.stderr || e.message).slice(0, 300)}`, "error");
+      }
+    },
+  });
+
   // ── /radio ────────────────────────────────────────────────────────────
   // Radio Browser API (https://api.radio-browser.info) — 30k+ stations, no key needed
   // Supports: genre/tag, station name, country, or raw stream URL
@@ -837,6 +1029,7 @@ export default function piDj(pi: ExtensionAPI) {
         `/bandlab <url>        BandLab track/album/collection → MP3\n\n` +
         `PRODUCTION\n` +
         `/render <f> [style]   music video via ffmpeg (bars|wave|circle|cqt)\n` +
+        `/subs <f> [style]     transcribe + karaoke subtitles (whisper)\n` +
         `/mix <a> <b> [s]      crossfade with ffmpeg\n` +
         `/trim <f> <s> [e]     trim clip\n` +
         `/bpm <file>           detect BPM\n\n` +
