@@ -189,7 +189,7 @@ function playStream(url: string, label: string): void {
   } else {
     throw new Error(`No player found. ${installHint()}`);
   }
-  isPlaying = true; isPaused = false; nowPlaying = label;
+  isPlaying = true; isPaused = false;
   updateStatus();
 }
 
@@ -271,6 +271,111 @@ async function togglePause() {
   else if (mpvPid && !IS_WIN) {
     try { process.kill(mpvPid, isPaused ? "SIGCONT" : "SIGSTOP"); isPaused = !isPaused; } catch {}
   }
+}
+
+// ── yt-dlp download helper (module-level — used by /sc, /bandcamp, /bandlab) ──
+async function ytdlpDownload(url: string, outDir: string, ctx: any): Promise<boolean> {
+  if (!tools.ytdlp) { ctx.ui.notify("yt-dlp not found. pip install yt-dlp", "warning"); return false; }
+  try {
+    execSync(
+      `${ytdlpBin()} -x --audio-format mp3 --audio-quality 0 -o "${outDir}/%(uploader)s/%(album,)s%(track_number& - ,)s%(title)s.%(ext)s" "${url}" 2>&1`,
+      { timeout: 120000, encoding: "utf-8" }
+    );
+    ctx.ui.notify(`✅ Downloaded to ${outDir}`, "success");
+    return true;
+  } catch (e: any) {
+    ctx.ui.notify(`Download failed: ${String(e.message || e).slice(0, 200)}`, "error");
+    return false;
+  }
+}
+
+// ── UNC path helper — makes C:/... safe in ffmpeg filter option strings ───
+// Colons in Windows paths break ffmpeg's filter option delimiter; UNC avoids it.
+function toUnc(p: string): string {
+  return IS_WIN ? p.replace(/^([A-Za-z]):\//, "//$1$/").replace(/\\/g, "/") : p;
+}
+
+// ── Radio Browser station type ─────────────────────────────────────────────
+interface RadioStation { name: string; url_resolved: string; country: string; tags: string; votes: number; }
+
+// Search Radio Browser (https://api.radio-browser.info) — 30k+ stations, no key needed.
+// Tries country+tag split for multi-word queries, then falls back to tag+name merge.
+async function radioSearch(query: string): Promise<RadioStation[]> {
+  const RADIO_API = "https://de1.api.radio-browser.info/json";
+  const parts = query.split(/\s+/);
+
+  async function search(endpoint: string): Promise<RadioStation[]> {
+    try {
+      const res = await fetch(`${RADIO_API}${endpoint}&hidebroken=true&order=votes&reverse=true&limit=5`);
+      return res.ok ? (await res.json() as RadioStation[]) : [];
+    } catch { return []; }
+  }
+
+  // Multi-word: try last word as country, rest as tag
+  if (parts.length > 1) {
+    const country = parts[parts.length - 1];
+    const tag = parts.slice(0, -1).join(" ");
+    const byCountry = await search(`/stations/bycountry/${encodeURIComponent(country)}?tag=${encodeURIComponent(tag)}`);
+    if (byCountry.length) return byCountry;
+  }
+
+  // Single-word (or country filter yielded nothing): merge tag + name results
+  const term = query;
+  const [byTag, byName] = await Promise.all([
+    search(`/stations/bytag/${encodeURIComponent(term)}`),
+    search(`/stations/byname/${encodeURIComponent(term)}`),
+  ]);
+  const seen = new Set<string>();
+  const merged: RadioStation[] = [];
+  for (const s of [...byTag, ...byName]) {
+    if (!seen.has(s.url_resolved)) { seen.add(s.url_resolved); merged.push(s); }
+  }
+  return merged.sort((a, b) => b.votes - a.votes).slice(0, 5);
+}
+
+// ── SRT → ASS converter (module-level — used by /subs) ────────────────────
+function srtToAss(srt: string, style: string): string {
+  const styleColor   = style === "karaoke" ? "&H0000FFFF" : "&H00FFFFFF";
+  const karaokeColor = "&H000080FF";
+  const header = [
+    "[Script Info]",
+    "ScriptType: v4.00+",
+    "PlayResX: 1920",
+    "PlayResY: 1080",
+    "WrapStyle: 0",
+    "",
+    "[V4+ Styles]",
+    "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
+    `Style: Default,Arial,72,${styleColor},${karaokeColor},&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,3,2,2,10,10,80,1`,
+    "",
+    "[Events]",
+    "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
+  ].join("\n");
+
+  const events: string[] = [];
+  for (const block of srt.trim().split(/\n\n+/)) {
+    const lines = block.trim().split("\n");
+    if (lines.length < 3) continue;
+    const text = lines.slice(2).join(" ").replace(/<[^>]+>/g, "");
+    const match = lines[1].match(/(\d+:\d+:\d+),(\d+)\s+-->\s+(\d+:\d+:\d+),(\d+)/);
+    if (!match) continue;
+    const startMs = parseInt(match[2]);
+    const endMs   = parseInt(match[4]);
+    const toAss = (hms: string, ms: number) =>
+      hms.replace(/^0/, "").replace(":", "h").replace(":", "m") + "." +
+      String(Math.floor(ms / 10)).padStart(2, "0") + "s";
+    const startAss = toAss(match[1], startMs);
+    const endAss   = toAss(match[3], endMs);
+
+    let assText = text;
+    if (style === "karaoke") {
+      const words = text.split(/\s+/).filter(Boolean);
+      const perWord = words.length > 0 ? Math.floor((endMs - startMs) / 10 / words.length) : 0;
+      assText = words.map(w => `{\\k${perWord}}${w}`).join(" ");
+    }
+    events.push(`Dialogue: 0,${startAss},${endAss},Default,,0,0,0,,${assText}`);
+  }
+  return header + "\n" + events.join("\n");
 }
 
 // ── Extension ─────────────────────────────────────────────────────────────
@@ -465,22 +570,6 @@ export default function piDj(pi: ExtensionAPI) {
       }
     },
   });
-
-  // ── shared yt-dlp download helper ────────────────────────────────────
-  async function ytdlpDownload(url: string, outDir: string, ctx: any): Promise<boolean> {
-    if (!tools.ytdlp) { ctx.ui.notify("yt-dlp not found. pip install yt-dlp", "warning"); return false; }
-    try {
-      execSync(
-        `${ytdlpBin()} -x --audio-format mp3 --audio-quality 0 -o "${outDir}/%(uploader)s/%(album,)s%(track_number& - ,)s%(title)s.%(ext)s" "${url}" 2>&1`,
-        { timeout: 120000, encoding: "utf-8" }
-      );
-      ctx.ui.notify(`✅ Downloaded to ${outDir}`, "success");
-      return true;
-    } catch (e: any) {
-      ctx.ui.notify(`Download failed: ${String(e.message || e).slice(0, 200)}`, "error");
-      return false;
-    }
-  }
 
   // ── /bandcamp ─────────────────────────────────────────────────────────
   pi.registerCommand("bandcamp", {
@@ -746,13 +835,6 @@ export default function piDj(pi: ExtensionAPI) {
         }
       }
 
-      // Convert paths to UNC form (//localhost/C$/...) so ffmpeg's filter parser
-      // doesn't choke on the ':' in "C:/..." — colon is the filter option delimiter
-      function toUnc(p: string): string {
-        // C:/Users/... → //localhost/C$/Users/...
-        return IS_WIN ? p.replace(/^([A-Za-z]):\//, "//$1$/").replace(/\\/g, "/") : p;
-      }
-
       const stem = basename(inputFile, extname(inputFile));
       mkdirSync(join(musicDir, "Videos"), { recursive: true });
       const srtPath = join(musicDir, "Videos", `${stem}.srt`);
@@ -779,57 +861,6 @@ export default function piDj(pi: ExtensionAPI) {
 
       // Step 2: convert SRT → ASS with karaoke styling
       const srtContent = readFileSync(srtPath, "utf-8");
-      function srtToAss(srt: string, style: string): string {
-        // ASS header
-        const styleColor = style === "karaoke" ? "&H0000FFFF" : style === "outline" ? "&H00FFFFFF" : "&H00FFFFFF";
-        const karaokeColor = "&H000080FF"; // orange highlight for karaoke
-        const header = [
-          "[Script Info]",
-          "ScriptType: v4.00+",
-          "PlayResX: 1920",
-          "PlayResY: 1080",
-          "WrapStyle: 0",
-          "",
-          "[V4+ Styles]",
-          "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
-          `Style: Default,Arial,72,${styleColor},${karaokeColor},&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,3,2,2,10,10,80,1`,
-          "",
-          "[Events]",
-          "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
-        ].join("\n");
-
-        // Parse SRT blocks
-        const events: string[] = [];
-        const blocks = srt.trim().split(/\n\n+/);
-        for (const block of blocks) {
-          const lines = block.trim().split("\n");
-          if (lines.length < 3) continue;
-          // lines[0] = index, lines[1] = timestamps, lines[2+] = text
-          const timeLine = lines[1];
-          const text = lines.slice(2).join(" ").replace(/<[^>]+>/g, ""); // strip HTML tags
-          // SRT time: 00:00:00,000 --> 00:00:02,960
-          const match = timeLine.match(/(\d+:\d+:\d+),(\d+)\s+-->\s+(\d+:\d+:\d+),(\d+)/);
-          if (!match) continue;
-          const startMs = parseInt(match[2]);
-          const endMs   = parseInt(match[4]);
-          const startAss = match[1].replace(/^0/, "").replace(":", "h").replace(":", "m") + "." + String(Math.floor(startMs / 10)).padStart(2, "0") + "s";
-          const endAss   = match[3].replace(/^0/, "").replace(":", "h").replace(":", "m") + "." + String(Math.floor(endMs / 10)).padStart(2, "0") + "s";
-
-          // For karaoke: add {\k<dur>} tags per word
-          let assText = text;
-          if (style === "karaoke") {
-            const durationCs = Math.floor((endMs - startMs) / 10); // centiseconds total
-            const words = text.split(/\s+/).filter(Boolean);
-            const perWord = words.length > 0 ? Math.floor(durationCs / words.length) : durationCs;
-            assText = words.map(w => `{\\k${perWord}}${w}`).join(" ");
-          }
-
-          events.push(`Dialogue: 0,${startAss},${endAss},Default,,0,0,0,,${assText}`);
-        }
-        return header + "\n" + events.join("\n");
-      }
-
-      const assContent = srtToAss(srtContent, styleArg);
       const { writeFileSync } = await import("node:fs");
       writeFileSync(assPath, assContent, "utf-8");
 
@@ -934,65 +965,19 @@ export default function piDj(pi: ExtensionAPI) {
 
       ctx.ui.notify(`📻 Searching Radio Browser for "${query}"…`, "info");
 
-      // Parse "jazz japan" → search by name+country or tag
-      const parts = query.split(/\s+/);
-      const RADIO_API = "https://de1.api.radio-browser.info/json";
-
-      interface RadioStation { name: string; url_resolved: string; country: string; tags: string; votes: number; }
-
-      async function searchStations(endpoint: string): Promise<RadioStation[]> {
-        try {
-          const res = await fetch(`${RADIO_API}${endpoint}&hidebroken=true&order=votes&reverse=true&limit=5`);
-          if (!res.ok) return [];
-          return (await res.json()) as RadioStation[];
-        } catch { return []; }
-      }
-
-      // Try: tag search first, then name search, then country
-      let stations: RadioStation[] = [];
-      const term = parts.join(" ");
-
-      // If 2+ words, try: last word as country, rest as tag
-      if (parts.length > 1) {
-        const country = parts[parts.length - 1];
-        const tag = parts.slice(0, -1).join(" ");
-        const byCountry = await searchStations(
-          `/stations/bycountry/${encodeURIComponent(country)}?tag=${encodeURIComponent(tag)}`
-        );
-        if (byCountry.length) stations = byCountry;
-      }
-
-      if (!stations.length) {
-        const byTag  = await searchStations(`/stations/bytag/${encodeURIComponent(term)}`);
-        const byName = await searchStations(`/stations/byname/${encodeURIComponent(term)}`);
-        // Merge, deduplicate by url
-        const seen = new Set<string>();
-        for (const s of [...byTag, ...byName]) {
-          if (!seen.has(s.url_resolved)) { seen.add(s.url_resolved); stations.push(s); }
-        }
-        stations.sort((a, b) => b.votes - a.votes);
-        stations = stations.slice(0, 5);
-      }
-
+      const stations = await radioSearch(query);
       if (!stations.length) {
         ctx.ui.notify(`No stations found for "${query}". Try a genre like: jazz, lofi, classical, pop, rock`, "warning");
         return;
       }
-
-      // Pick top station and play
       const station = stations[0];
-      const streamUrl = station.url_resolved;
       const label = `${station.name}${station.country ? ` (${station.country})` : ""}`;
-
       ctx.ui.notify(
-        `📻 ${label}\n` +
-        (stations.length > 1
-          ? `Other matches: ${stations.slice(1).map(s => s.name).join(", ")}`
-          : ""),
+        `📻 ${label}` +
+        (stations.length > 1 ? `\nOther matches: ${stations.slice(1).map(s => s.name).join(", ")}` : ""),
         "info"
       );
-
-      try { playStream(streamUrl, label); }
+      try { playStream(station.url_resolved, label); }
       catch (e: any) { ctx.ui.notify(String(e.message), "error"); }
     },
   });
@@ -1112,36 +1097,7 @@ export default function piDj(pi: ExtensionAPI) {
       }
 
       // Radio Browser search
-      interface RadioStation { name: string; url_resolved: string; country: string; votes: number; }
-      const parts = q.split(/\s+/);
-      const RADIO_API = "https://de1.api.radio-browser.info/json";
-      async function search(ep: string): Promise<RadioStation[]> {
-        try {
-          const r = await fetch(`${RADIO_API}${ep}&hidebroken=true&order=votes&reverse=true&limit=5`);
-          return r.ok ? (await r.json() as RadioStation[]) : [];
-        } catch { return []; }
-      }
-
-      let stations: RadioStation[] = [];
-      if (parts.length > 1) {
-        const country = parts[parts.length - 1];
-        const tag = parts.slice(0, -1).join(" ");
-        stations = await search(`/stations/bycountry/${encodeURIComponent(country)}?tag=${encodeURIComponent(tag)}`);
-      }
-      if (!stations.length) {
-        const term = q;
-        const [byTag, byName] = await Promise.all([
-          search(`/stations/bytag/${encodeURIComponent(term)}`),
-          search(`/stations/byname/${encodeURIComponent(term)}`),
-        ]);
-        const seen = new Set<string>();
-        for (const s of [...byTag, ...byName]) {
-          if (!seen.has(s.url_resolved)) { seen.add(s.url_resolved); stations.push(s); }
-        }
-        stations.sort((a, b) => b.votes - a.votes);
-        stations = stations.slice(0, 5);
-      }
-
+      const stations = await radioSearch(q);
       if (!stations.length) return { content: [{ type: "text", text: `No stations found for "${q}"` }], isError: true };
 
       const station = stations[0];
@@ -1151,10 +1107,7 @@ export default function piDj(pi: ExtensionAPI) {
 
       const others = stations.slice(1).map(s => s.name).join(", ");
       return {
-        content: [{
-          type: "text",
-          text: `📻 ${label}${others ? `\nOther matches: ${others}` : ""}`,
-        }],
+        content: [{ type: "text", text: `📻 ${label}${others ? `\nOther matches: ${others}` : ""}` }],
       };
     },
   });

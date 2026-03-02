@@ -24,52 +24,21 @@ import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import type { Component } from "@mariozechner/pi-tui";
 import { TUI, truncateToWidth } from "@mariozechner/pi-tui";
 import { spawn, type ChildProcess } from "node:child_process";
-import { existsSync, mkdirSync } from "node:fs";
-import { platform, tmpdir, homedir } from "node:os";
+import { platform, tmpdir } from "node:os";
 import { join } from "node:path";
 import * as net from "node:net";
 
 const IS_WIN = platform() === "win32";
 const TMP    = tmpdir();
-const HOME   = homedir();
 
 // ─────────────────────────────────────────────────────────────────────────────
 // MPV PCM TAP — reads raw PCM from mpv's ao=pcm named pipe
 // Lets /viz react to the actual music playing in mpv (pi-dj's /dj-play)
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Named pipe / socket path must match pi-dj's IPC_PATH convention
-const MPV_IPC   = IS_WIN ? "\\\\.\\pipe\\mpv-pi-dj"     : join(TMP, "mpv-pi-dj.sock");
-const PCM_PIPE  = IS_WIN ? "\\\\.\\pipe\\mpv-pcm-tap"   : join(TMP, "mpv-pcm-tap.pcm");
-// mpv ao=pcm file path (forward slashes for mpv on Windows)
-const PCM_FILE_MPV = IS_WIN
-  ? PCM_PIPE.replace(/\\\\/g, "/").replace(/^\\\\.\\pipe\\/, "\\\\.\\pipe\\")
-  : PCM_PIPE;
-
-/** Ask the running mpv (via IPC) to start writing PCM to our named pipe */
-async function mpvEnablePcmTap(): Promise<boolean> {
-  if (!existsSync(MPV_IPC) && !IS_WIN) return false;
-  return new Promise(resolve => {
-    try {
-      const client = net.createConnection(MPV_IPC as any);
-      client.setTimeout(500);
-      client.on("connect", () => {
-        // Tell mpv to add ao=pcm output filter writing to our pipe
-        const cmd = JSON.stringify({
-          command: ["af-add", `lavfi=[asplit=2[a][b];[b]afifo[out]]`],
-          request_id: 1
-        }) + "\n";
-        client.write(cmd);
-        // Also request current media-title for ICY display
-        const cmd2 = JSON.stringify({ command: ["get_property", "media-title"], request_id: 2 }) + "\n";
-        client.write(cmd2);
-        setTimeout(() => { client.destroy(); resolve(true); }, 200);
-      });
-      client.on("error", () => resolve(false));
-      client.on("timeout", () => { client.destroy(); resolve(false); });
-    } catch { resolve(false); }
-  });
-}
+// Named pipe / socket path — must match pi-dj's IPC_PATH
+const MPV_IPC  = IS_WIN ? "\\\\.\\pipe\\mpv-pi-dj"   : join(TMP, "mpv-pi-dj.sock");
+const PCM_PIPE = IS_WIN ? "\\\\.\\pipe\\mpv-pcm-tap"  : join(TMP, "mpv-pcm-tap.pcm");
 
 /** Poll mpv IPC for current media-title (ICY StreamTitle or filename) */
 function mpvGetTitle(): Promise<string | null> {
@@ -571,135 +540,184 @@ function renderHalfBlock(fb:Uint8Array,fbW:number,fbH:number,cols:number,rows:nu
     for(let col=0;col<cols;col++){const x=Math.floor(col*sx),i1=(y1*fbW+x)*3,i2=(y2*fbW+x)*3;line+=`\x1b[38;2;${fb[i1]||0};${fb[i1+1]||0};${fb[i1+2]||0}m\x1b[48;2;${fb[i2]||0};${fb[i2+1]||0};${fb[i2+2]||0}m\u2580`;}lines.push(line+"\x1b[0m");}return lines;}
 
 // ─────────────────────────────────────────────────────────────────────────────
+// SHARED VIZ HELPERS — used by both FullscreenViz and VizComponent
+// ─────────────────────────────────────────────────────────────────────────────
+
+type RenderMode = "halfblock" | "braille" | "ascii";
+
+interface VizState {
+  audio: AudioCapture;
+  t0: number;
+  paused: boolean;
+  shaderIdx: number;
+  brailleIdx: number;
+  mode: RenderMode;
+  frame: number;
+  sens: number;
+  fb: Uint8Array;
+  fbW: number;
+  fbH: number;
+  sBass: number; sMid: number; sTreble: number; sBeat: number;
+}
+
+/** Poll mpv IPC for now-playing title every 3s. Returns the interval handle. */
+function startTitlePolling(maxLen: number, onTitle: (t: string) => void): ReturnType<typeof setInterval> {
+  mpvGetTitle().then(t => { if (t) onTitle(t.slice(0, maxLen)); });
+  return setInterval(async () => {
+    const t = await mpvGetTitle();
+    if (t) onTitle(t.slice(0, maxLen));
+  }, 3000);
+}
+
+/**
+ * Handle a keypress against shared viz state.
+ * Returns "quit" | "fullscreen" | null.
+ * The caller handles quit/fullscreen transitions — this only mutates state.
+ */
+function handleKeyCore(key: string, s: VizState): "quit" | "fullscreen" | null {
+  if (key === "q" || key === "Q" || key === "\x1b" || key === "\x03") return "quit";
+  if (key === " ")           { s.paused = !s.paused; return null; }
+  if (key === "f" || key === "F") return "fullscreen";
+  if (key === "v" || key === "V") {
+    if      (s.mode === "halfblock") s.mode = "braille";
+    else if (s.mode === "braille")   s.mode = "ascii";
+    else                             s.mode = "halfblock";
+    return null;
+  }
+  if (key === "a" || key === "A") { s.mode = s.mode === "ascii" ? "halfblock" : "ascii"; return null; }
+  if (key === "b")  { s.mode = "braille"; s.brailleIdx = (s.brailleIdx + 1) % BRAILLE_SHADERS.length; return null; }
+  if (key === "n" || key === "N") {
+    if (s.mode === "braille") s.brailleIdx = (s.brailleIdx + 1) % BRAILLE_SHADERS.length;
+    else s.shaderIdx = (s.shaderIdx + 1) % SHADERS.length;
+    return null;
+  }
+  if (key === "p" || key === "P") {
+    if (s.mode === "braille") s.brailleIdx = (s.brailleIdx - 1 + BRAILLE_SHADERS.length) % BRAILLE_SHADERS.length;
+    else s.shaderIdx = (s.shaderIdx - 1 + SHADERS.length) % SHADERS.length;
+    return null;
+  }
+  if (key >= "1" && key <= "9") {
+    const idx = parseInt(key) - 1;
+    if (idx < SHADERS.length) { s.mode = "halfblock"; s.shaderIdx = idx; }
+    return null;
+  }
+  if (key === "0" && SHADERS.length >= 10) { s.mode = "halfblock"; s.shaderIdx = 9; return null; }
+  if (key === "+" || key === "=") { s.sens = Math.min(5, s.sens + 0.2); return null; }
+  if (key === "-")                { s.sens = Math.max(0.2, s.sens - 0.2); return null; }
+  return null;
+}
+
+/**
+ * Render one frame into string lines (without footer).
+ * Mutates s.fb, s.fbW, s.fbH, s.frame, s.sBass, s.sMid, s.sTreble, s.sBeat.
+ */
+function renderVizLines(s: VizState, cols: number, rows: number): string[] {
+  const fbW = cols, fbH = rows * 2;
+  if (s.fbW !== fbW || s.fbH !== fbH) {
+    s.fb = new Uint8Array(fbW * fbH * 3);
+    s.fbW = fbW; s.fbH = fbH;
+  }
+
+  const numBands = 32;
+  const time = (Date.now() - s.t0) / 1000;
+  let bands: Float32Array;
+  let bass = 0, mid = 0, treble = 0;
+
+  if (s.audio.alive) {
+    bands = computeBands(tapRead(FFT_SIZE), numBands);
+    for (let i = 0; i < bands.length; i++) bands[i] *= s.sens;
+    for (let i = 0; i < 4; i++) bass += bands[i]; bass /= 4;
+    for (let i = 4; i < 16; i++) mid += bands[i]; mid /= 12;
+    for (let i = 16; i < numBands; i++) treble += bands[i]; treble /= (numBands - 16);
+    const a = 0.3;
+    s.sBass   += (bass   - s.sBass)   * a;
+    s.sMid    += (mid    - s.sMid)    * a;
+    s.sTreble += (treble - s.sTreble) * a;
+    s.sBeat = Math.max(detectBeat(tapRead(FFT_SIZE)), s.sBeat * 0.85);
+  } else {
+    bands = new Float32Array(numBands);
+    for (let i = 0; i < numBands; i++) {
+      bands[i] = (Math.sin(time * 2.5 + i * 0.4) * 0.5 + 0.5) * 0.25 * s.sens;
+      bands[i] += (Math.sin(time * 1.1 + i * 1.7) * 0.3 + 0.3) * 0.15 * s.sens;
+    }
+    s.sBass = bands[1]; s.sMid = bands[10]; s.sTreble = bands[25];
+    s.sBeat = Math.sin(time * 3.2) > 0.7 ? 0.4 : s.sBeat * 0.85;
+  }
+
+  s.frame++;
+  const rawSamples = s.audio.alive ? tapRead(FFT_SIZE) : new Float32Array(0);
+  const lines: string[] = [];
+
+  if (s.mode === "braille") {
+    const str = BRAILLE_SHADERS[s.brailleIdx].fn(bands, cols, rows, s.frame, time, rawSamples);
+    lines.push(...str.split("\n"));
+  } else {
+    SHADERS[s.shaderIdx].fn(s.fb, fbW, fbH, time, bands, s.sBass, s.sMid, s.sTreble, s.sBeat,
+      rawSamples.length ? rawSamples : undefined);
+    const rawLines = s.mode === "ascii"
+      ? renderASCII(s.fb, fbW, fbH, cols, rows)
+      : renderHalfBlock(s.fb, fbW, fbH, cols, rows);
+    lines.push(...rawLines);
+  }
+  return lines;
+}
+
+/** Build the shared part of the footer (source + pause + mode + name + beat). */
+function vizFooterBase(s: VizState, nowPlaying: string): string {
+  const src      = s.audio.alive ? (s.audio.source === "mpv" ? "\x1b[32m♫ mpv\x1b[0m" : "\x1b[32m● mic\x1b[0m") : "\x1b[33m◌ demo\x1b[0m";
+  const paused   = s.paused ? " \x1b[31m❚❚\x1b[0m" : "";
+  const modeTag  = s.mode === "ascii" ? "\x1b[33m[ASCII]\x1b[0m" : s.mode === "braille" ? "\x1b[36m[Braille]\x1b[0m" : "";
+  const name     = s.mode === "braille" ? BRAILLE_SHADERS[s.brailleIdx].name : SHADERS[s.shaderIdx].name;
+  const beatBar  = s.sBeat > 0.1 ? "\x1b[31m" + "█".repeat(Math.floor(s.sBeat * 6)) + "\x1b[0m" : "";
+  const np       = nowPlaying ? ` \x1b[2m♪ ${nowPlaying}\x1b[0m` : "";
+  return ` ${src}${paused} ${modeTag} ${name} ${beatBar}${np}`;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // FULLSCREEN MODE — raw terminal, no TUI chrome
 // Writes directly to process.stdout using alt-screen + cursor hide
 // ─────────────────────────────────────────────────────────────────────────────
 
 class FullscreenViz {
-  private timer: ReturnType<typeof setInterval> | null = null;
-  private audio: AudioCapture;
-  private t0 = Date.now();
-  private paused = false;
-  private shaderIdx = 0;
-  private brailleIdx = 0;
-  private mode: "halfblock"|"braille"|"ascii" = "halfblock";
-  private frame = 0;
-  private sens = 1.0;
-  private fb: Uint8Array = new Uint8Array(0);
-  private fbW = 0; private fbH = 0;
-  private sBass=0; private sMid=0; private sTreble=0; private sBeat=0;
+  private s: VizState = {
+    audio: startAudioCapture(), t0: Date.now(), paused: false,
+    shaderIdx: 0, brailleIdx: 0, mode: "halfblock", frame: 0, sens: 1.0,
+    fb: new Uint8Array(0), fbW: 0, fbH: 0, sBass: 0, sMid: 0, sTreble: 0, sBeat: 0,
+  };
   private nowPlaying = "";
+  private timer: ReturnType<typeof setInterval> | null = null;
   private titleTimer: ReturnType<typeof setInterval> | null = null;
-  private onExit: () => void;
 
-  constructor(onExit: () => void) {
-    this.onExit = onExit;
-    this.audio = startAudioCapture();
-
-    // Enter alt screen, hide cursor
+  constructor(private onExit: () => void) {
     process.stdout.write("\x1b[?1049h\x1b[?25l");
-
-    // Raw mode for keypress detection
     if (process.stdin.isTTY) {
       process.stdin.setRawMode(true);
       process.stdin.resume();
       process.stdin.setEncoding("utf8");
       process.stdin.on("data", (key: string) => this.handleKey(key));
     }
-
-    // Poll mpv for now-playing title every 3s
-    this.titleTimer = setInterval(async () => {
-      const t = await mpvGetTitle();
-      if (t) this.nowPlaying = t.slice(0, 60);
-    }, 3000);
-    mpvGetTitle().then(t => { if (t) this.nowPlaying = t.slice(0, 60); });
-
-    this.timer = setInterval(() => { if (!this.paused) this.renderFrame(); }, 33);
+    this.titleTimer = startTitlePolling(60, t => { this.nowPlaying = t; });
+    this.timer = setInterval(() => { if (!this.s.paused) this.renderFrame(); }, 33);
   }
 
-  private handleKey(key: string) {
-    if (key === "q" || key === "Q" || key === "\x1b" || key === "\x03") { this.cleanup(); return; }
-    if (key === " ")           { this.paused = !this.paused; return; }
-    if (key === "f" || key === "F") { this.cleanup(); return; } // F again exits fullscreen
-    if (key === "v" || key === "V") {
-      if      (this.mode==="halfblock") this.mode="braille";
-      else if (this.mode==="braille")   this.mode="ascii";
-      else                              this.mode="halfblock";
-      return;
-    }
-    if (key==="a"||key==="A") { this.mode=this.mode==="ascii"?"halfblock":"ascii"; return; }
-    if (key==="b")            { this.mode="braille"; this.brailleIdx=(this.brailleIdx+1)%BRAILLE_SHADERS.length; return; }
-    if (key==="n"||key==="N") { if(this.mode==="braille")this.brailleIdx=(this.brailleIdx+1)%BRAILLE_SHADERS.length;else this.shaderIdx=(this.shaderIdx+1)%SHADERS.length; return; }
-    if (key==="p"||key==="P") { if(this.mode==="braille")this.brailleIdx=(this.brailleIdx-1+BRAILLE_SHADERS.length)%BRAILLE_SHADERS.length;else this.shaderIdx=(this.shaderIdx-1+SHADERS.length)%SHADERS.length; return; }
-    if (key>="1"&&key<="9")   { const idx=parseInt(key)-1;if(idx<SHADERS.length){this.mode="halfblock";this.shaderIdx=idx;} return; }
-    if (key==="0"&&SHADERS.length>=10) { this.mode="halfblock";this.shaderIdx=9; return; }
-    if (key==="+"||key==="=") { this.sens=Math.min(5,this.sens+0.2); return; }
-    if (key==="-")            { this.sens=Math.max(0.2,this.sens-0.2); return; }
+  private handleKey(key: string): void {
+    const action = handleKeyCore(key, this.s);
+    if (action === "quit" || action === "fullscreen") this.cleanup(); // F exits fullscreen too
   }
 
-  private renderFrame() {
-    const cols = process.stdout.columns  || 80;
-    const rows = (process.stdout.rows || 24) - 1; // -1 for footer
-    const fbW = cols, fbH = rows * 2;
-
-    if (this.fbW !== fbW || this.fbH !== fbH) {
-      this.fb = new Uint8Array(fbW * fbH * 3);
-      this.fbW = fbW; this.fbH = fbH;
-    }
-
-    const numBands = 32;
-    const time = (Date.now() - this.t0) / 1000;
-    let bands: Float32Array;
-    let bass=0,mid=0,treble=0;
-
-    if (this.audio.alive) {
-      bands = computeBands(tapRead(FFT_SIZE), numBands);
-      for (let i=0;i<bands.length;i++) bands[i]*=this.sens;
-      for (let i=0;i<4;i++) bass+=bands[i]; bass/=4;
-      for (let i=4;i<16;i++) mid+=bands[i]; mid/=12;
-      for (let i=16;i<numBands;i++) treble+=bands[i]; treble/=(numBands-16);
-      const a=0.3;this.sBass+=(bass-this.sBass)*a;this.sMid+=(mid-this.sMid)*a;this.sTreble+=(treble-this.sTreble)*a;
-      this.sBeat=Math.max(detectBeat(tapRead(FFT_SIZE)),this.sBeat*0.85);
-    } else {
-      bands=new Float32Array(numBands);
-      for(let i=0;i<numBands;i++){bands[i]=(Math.sin(time*2.5+i*0.4)*0.5+0.5)*0.25*this.sens;bands[i]+=(Math.sin(time*1.1+i*1.7)*0.3+0.3)*0.15*this.sens;}
-      this.sBass=bands[1];this.sMid=bands[10];this.sTreble=bands[25];
-      this.sBeat=Math.sin(time*3.2)>0.7?0.4:this.sBeat*0.85;
-    }
-
-    this.frame++;
-    const rawSamples = this.audio.alive ? tapRead(FFT_SIZE) : new Float32Array(0);
-    const out: string[] = [];
-
-    if (this.mode === "braille") {
-      const str = BRAILLE_SHADERS[this.brailleIdx].fn(bands, cols, rows, this.frame, time, rawSamples);
-      out.push(...str.split("\n"));
-    } else {
-      SHADERS[this.shaderIdx].fn(this.fb, fbW, fbH, time, bands, this.sBass, this.sMid, this.sTreble, this.sBeat, rawSamples.length ? rawSamples : undefined);
-      const rawLines = this.mode === "ascii" ? renderASCII(this.fb, fbW, fbH, cols, rows) : renderHalfBlock(this.fb, fbW, fbH, cols, rows);
-      out.push(...rawLines);
-    }
-
-    // Footer bar
-    const src   = this.audio.alive ? (this.audio.source === "mpv" ? "\x1b[32m♫ mpv\x1b[0m" : "\x1b[32m● mic\x1b[0m") : "\x1b[33m◌ demo\x1b[0m";
-    const paused = this.paused ? " \x1b[31m❚❚\x1b[0m" : "";
-    const modeTag = this.mode==="ascii"?"\x1b[33m[ASCII]\x1b[0m":this.mode==="braille"?"\x1b[36m[Braille]\x1b[0m":"";
-    const name  = this.mode==="braille" ? BRAILLE_SHADERS[this.brailleIdx].name : SHADERS[this.shaderIdx].name;
-    const beatBar = this.sBeat > 0.1 ? "\x1b[31m"+"█".repeat(Math.floor(this.sBeat*6))+"\x1b[0m" : "";
-    const np    = this.nowPlaying ? ` \x1b[2m${this.nowPlaying}\x1b[0m` : "";
-    const footer = ` ${src}${paused} ${modeTag} ${name} ${beatBar}${np}\x1b[2m | N/P  v  a  b  +-  F=exit\x1b[0m`;
-
-    // Home cursor + write all lines + footer in one write (minimise flicker)
-    const frame = "\x1b[H" + out.join("\n") + "\n" + footer.slice(0, cols * 6) + "\x1b[K";
-    process.stdout.write(frame);
+  private renderFrame(): void {
+    const cols = process.stdout.columns || 80;
+    const rows = (process.stdout.rows || 24) - 1;
+    const lines = renderVizLines(this.s, cols, rows);
+    const footer = vizFooterBase(this.s, this.nowPlaying) + "\x1b[2m | N/P  v  a  b  +-  F=exit\x1b[0m";
+    process.stdout.write("\x1b[H" + lines.join("\n") + "\n" + footer.slice(0, cols * 6) + "\x1b[K");
   }
 
-  private cleanup() {
-    if (this.timer)       { clearInterval(this.timer); this.timer = null; }
+  private cleanup(): void {
+    if (this.timer)       { clearInterval(this.timer);      this.timer = null; }
     if (this.titleTimer)  { clearInterval(this.titleTimer); this.titleTimer = null; }
-    if (this.audio.proc)  { try { this.audio.proc.kill(); } catch {} }
+    if (this.s.audio.proc) { try { this.s.audio.proc.kill(); } catch {} }
     if (process.stdin.isTTY) { try { process.stdin.setRawMode(false); } catch {} process.stdin.pause(); }
-    // Exit alt screen, restore cursor
     process.stdout.write("\x1b[?1049l\x1b[?25h");
     this.onExit();
   }
@@ -709,126 +727,46 @@ class FullscreenViz {
 // TUI COMPONENT (embedded in pi — no fullscreen)
 // ─────────────────────────────────────────────────────────────────────────────
 
-type RenderMode = "halfblock"|"braille"|"ascii";
-
 class VizComponent implements Component {
-  private tui: TUI;
-  private done: (v: undefined) => void;
-  private timer: ReturnType<typeof setInterval> | null = null;
-  private audio: AudioCapture;
-  private t0 = Date.now();
-  private paused = false;
-  private shaderIdx = 0;
-  private brailleIdx = 0;
-  private mode: RenderMode = "halfblock";
-  private frame = 0;
-  private sens = 1.0;
-  private fb: Uint8Array = new Uint8Array(0);
-  private fbW = 0; private fbH = 0;
-  private sBass=0; private sMid=0; private sTreble=0; private sBeat=0;
+  private s: VizState = {
+    audio: startAudioCapture(), t0: Date.now(), paused: false,
+    shaderIdx: 0, brailleIdx: 0, mode: "halfblock", frame: 0, sens: 1.0,
+    fb: new Uint8Array(0), fbW: 0, fbH: 0, sBass: 0, sMid: 0, sTreble: 0, sBeat: 0,
+  };
   private nowPlaying = "";
+  private timer: ReturnType<typeof setInterval> | null = null;
   private titleTimer: ReturnType<typeof setInterval> | null = null;
 
-  constructor(tui: TUI, done: (v: undefined) => void) {
-    this.tui  = tui;
-    this.done = done;
-    this.audio = startAudioCapture();
-    this.timer = setInterval(() => { if (!this.paused) this.tui.requestRender(); }, 33);
-    // Poll mpv for ICY now-playing title
-    this.titleTimer = setInterval(async () => {
-      const t = await mpvGetTitle(); if (t) this.nowPlaying = t.slice(0, 50);
-    }, 3000);
-    mpvGetTitle().then(t => { if (t) this.nowPlaying = t.slice(0, 50); });
+  constructor(private tui: TUI, private done: (v: undefined) => void) {
+    this.timer = setInterval(() => { if (!this.s.paused) this.tui.requestRender(); }, 33);
+    this.titleTimer = startTitlePolling(50, t => { this.nowPlaying = t; });
   }
 
   handleInput(data: string): void {
-    const key = data;
-    if (key==="q"||key==="Q"||key==="\x1b") { this.cleanup(); this.done(undefined); return; }
-    if (key===" ")           { this.paused=!this.paused; return; }
-    // F = switch to fullscreen mode
-    if (key==="f"||key==="F") {
+    const action = handleKeyCore(data, this.s);
+    if (action === "quit") { this.cleanup(); this.done(undefined); return; }
+    if (action === "fullscreen") {
       this.cleanup();
       this.done(undefined);
-      // small delay so TUI tears down, then launch fullscreen
-      setTimeout(() => {
-        new FullscreenViz(() => {
-          // fullscreen exited — nothing to do, user is back at pi prompt
-        });
-      }, 100);
-      return;
+      setTimeout(() => new FullscreenViz(() => {}), 100);
     }
-    if (key==="v"||key==="V") { if(this.mode==="halfblock")this.mode="braille";else if(this.mode==="braille")this.mode="ascii";else this.mode="halfblock"; return; }
-    if (key==="a"||key==="A") { this.mode=this.mode==="ascii"?"halfblock":"ascii"; return; }
-    if (key==="b")            { this.mode="braille";this.brailleIdx=(this.brailleIdx+1)%BRAILLE_SHADERS.length; return; }
-    if (key==="n"||key==="N") { if(this.mode==="braille")this.brailleIdx=(this.brailleIdx+1)%BRAILLE_SHADERS.length;else this.shaderIdx=(this.shaderIdx+1)%SHADERS.length; return; }
-    if (key==="p"||key==="P") { if(this.mode==="braille")this.brailleIdx=(this.brailleIdx-1+BRAILLE_SHADERS.length)%BRAILLE_SHADERS.length;else this.shaderIdx=(this.shaderIdx-1+SHADERS.length)%SHADERS.length; return; }
-    if (key>="1"&&key<="9")   { const idx=parseInt(key)-1;if(idx<SHADERS.length){this.mode="halfblock";this.shaderIdx=idx;} return; }
-    if (key==="0"&&SHADERS.length>=10) { this.mode="halfblock";this.shaderIdx=9; return; }
-    if (key==="+"||key==="=") { this.sens=Math.min(5,this.sens+0.2); return; }
-    if (key==="-")            { this.sens=Math.max(0.2,this.sens-0.2); return; }
   }
 
   render(width: number): string[] {
     const cols = Math.max(1, width - 1);
     const rows = Math.max(6, this.tui.terminal.rows - 3);
-    const fbW = cols, fbH = rows * 2;
-
-    if (this.fbW !== fbW || this.fbH !== fbH) {
-      this.fb = new Uint8Array(fbW * fbH * 3);
-      this.fbW = fbW; this.fbH = fbH;
-    }
-
-    const numBands = 32;
-    const time = (Date.now() - this.t0) / 1000;
-    let bands: Float32Array;
-    let bass=0,mid=0,treble=0;
-
-    if (this.audio.alive) {
-      bands = computeBands(tapRead(FFT_SIZE), numBands);
-      for(let i=0;i<bands.length;i++) bands[i]*=this.sens;
-      for(let i=0;i<4;i++) bass+=bands[i]; bass/=4;
-      for(let i=4;i<16;i++) mid+=bands[i]; mid/=12;
-      for(let i=16;i<numBands;i++) treble+=bands[i]; treble/=(numBands-16);
-      const a=0.3;this.sBass+=(bass-this.sBass)*a;this.sMid+=(mid-this.sMid)*a;this.sTreble+=(treble-this.sTreble)*a;
-      this.sBeat=Math.max(detectBeat(tapRead(FFT_SIZE)),this.sBeat*0.85);
-    } else {
-      bands=new Float32Array(numBands);
-      for(let i=0;i<numBands;i++){bands[i]=(Math.sin(time*2.5+i*0.4)*0.5+0.5)*0.25*this.sens;bands[i]+=(Math.sin(time*1.1+i*1.7)*0.3+0.3)*0.15*this.sens;}
-      this.sBass=bands[1];this.sMid=bands[10];this.sTreble=bands[25];
-      this.sBeat=Math.sin(time*3.2)>0.7?0.4:this.sBeat*0.85;
-    }
-
-    this.frame++;
-    const rawSamples = this.audio.alive ? tapRead(FFT_SIZE) : new Float32Array(0);
-    const lines: string[] = [];
-
-    if (this.mode === "braille") {
-      const str = BRAILLE_SHADERS[this.brailleIdx].fn(bands, cols, rows, this.frame, time, rawSamples);
-      for (const l of str.split("\n")) lines.push(truncateToWidth(l, width));
-    } else {
-      SHADERS[this.shaderIdx].fn(this.fb, fbW, fbH, time, bands, this.sBass, this.sMid, this.sTreble, this.sBeat, rawSamples.length ? rawSamples : undefined);
-      const rawLines = this.mode === "ascii" ? renderASCII(this.fb, fbW, fbH, cols, rows) : renderHalfBlock(this.fb, fbW, fbH, cols, rows);
-      for (const l of rawLines) lines.push(truncateToWidth(l, width));
-    }
-
-    // Footer with ICY now-playing
-    const src    = this.audio.alive ? (this.audio.source==="mpv"?"\x1b[32m♫ mpv\x1b[0m":"\x1b[32m● mic\x1b[0m") : "\x1b[33m◌ demo\x1b[0m";
-    const paused = this.paused ? " \x1b[31m❚❚\x1b[0m" : "";
-    const modeTag= this.mode==="ascii"?"\x1b[33m[ASCII]\x1b[0m":this.mode==="braille"?"\x1b[36m[Braille]\x1b[0m":"";
-    const name   = this.mode==="braille" ? BRAILLE_SHADERS[this.brailleIdx].name : SHADERS[this.shaderIdx].name;
-    const beatBar= this.sBeat>0.1?"\x1b[31m"+"█".repeat(Math.floor(this.sBeat*6))+"\x1b[0m":"";
-    const np     = this.nowPlaying ? ` \x1b[2m♪ ${this.nowPlaying}\x1b[0m` : "";
-    const footer = ` ${src}${paused} ${modeTag} ${name} ${beatBar}${np}\x1b[2m | N/P v a b +- F=full Q=quit\x1b[0m`;
+    const lines = renderVizLines(this.s, cols, rows).map(l => truncateToWidth(l, width));
+    const footer = vizFooterBase(this.s, this.nowPlaying) + "\x1b[2m | N/P v a b +- F=full Q=quit\x1b[0m";
     lines.push(truncateToWidth(footer, width));
     return lines;
   }
 
   invalidate(): void {}
 
-  private cleanup() {
+  private cleanup(): void {
     if (this.timer)      { clearInterval(this.timer);      this.timer = null; }
     if (this.titleTimer) { clearInterval(this.titleTimer); this.titleTimer = null; }
-    if (this.audio.proc) { try { this.audio.proc.kill(); } catch {} }
+    if (this.s.audio.proc) { try { this.s.audio.proc.kill(); } catch {} }
   }
 }
 
