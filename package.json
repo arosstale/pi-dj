@@ -36,7 +36,8 @@
   },
   "pi": {
     "extensions": [
-      "extensions/pi-dj.ts"
+      "extensions/pi-dj.ts",
+      "extensions/pi-djvj.ts"
     ],
     "image": "https://raw.githubusercontent.com/arosstale/pi-dj/master/assets/banner.png"
   },
