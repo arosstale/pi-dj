@@ -709,22 +709,8 @@ export default function piDj(pi: ExtensionAPI) {
       "/radio lyria <1-9>        — Lyria by preset number",
     ].join("\n"),
     handler: async (args, ctx) => {
-      const query = args.trim();
-      if (!query) {
-        ctx.ui.notify(
-          "Usage:\n" +
-          "  /radio <genre|name|country>  — search Radio Browser (30k+ stations)\n" +
-          "  /radio <http url>            — stream URL directly\n" +
-          "  /radio lyria [preset]        — Lyria AI radio\n\n" +
-          "Examples:\n" +
-          "  /radio lofi\n" +
-          "  /radio jazz\n" +
-          "  /radio classical germany\n" +
-          "  /radio lyria chill",
-          "info"
-        );
-        return;
-      }
+      // No args → play curated default (lofi, top station by votes)
+      const query = args.trim() || "lofi";
 
       // ── Lyria AI radio → delegate to lyria-cli (same as cliamp) ─────────
       if (query.toLowerCase().startsWith("lyria")) {
