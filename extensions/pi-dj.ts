@@ -335,51 +335,6 @@ async function radioSearch(query: string): Promise<RadioStation[]> {
   return merged.sort((a, b) => b.votes - a.votes).slice(0, 5);
 }
 
-// ── SRT → ASS converter (module-level — used by /subs) ────────────────────
-function srtToAss(srt: string, style: string): string {
-  const styleColor   = style === "karaoke" ? "&H0000FFFF" : "&H00FFFFFF";
-  const karaokeColor = "&H000080FF";
-  const header = [
-    "[Script Info]",
-    "ScriptType: v4.00+",
-    "PlayResX: 1920",
-    "PlayResY: 1080",
-    "WrapStyle: 0",
-    "",
-    "[V4+ Styles]",
-    "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
-    `Style: Default,Arial,72,${styleColor},${karaokeColor},&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,3,2,2,10,10,80,1`,
-    "",
-    "[Events]",
-    "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
-  ].join("\n");
-
-  const events: string[] = [];
-  for (const block of srt.trim().split(/\n\n+/)) {
-    const lines = block.trim().split("\n");
-    if (lines.length < 3) continue;
-    const text = lines.slice(2).join(" ").replace(/<[^>]+>/g, "");
-    const match = lines[1].match(/(\d+:\d+:\d+),(\d+)\s+-->\s+(\d+:\d+:\d+),(\d+)/);
-    if (!match) continue;
-    const startMs = parseInt(match[2]);
-    const endMs   = parseInt(match[4]);
-    const toAss = (hms: string, ms: number) =>
-      hms.replace(/^0/, "").replace(":", "h").replace(":", "m") + "." +
-      String(Math.floor(ms / 10)).padStart(2, "0") + "s";
-    const startAss = toAss(match[1], startMs);
-    const endAss   = toAss(match[3], endMs);
-
-    let assText = text;
-    if (style === "karaoke") {
-      const words = text.split(/\s+/).filter(Boolean);
-      const perWord = words.length > 0 ? Math.floor((endMs - startMs) / 10 / words.length) : 0;
-      assText = words.map(w => `{\\k${perWord}}${w}`).join(" ");
-    }
-    events.push(`Dialogue: 0,${startAss},${endAss},Default,,0,0,0,,${assText}`);
-  }
-  return header + "\n" + events.join("\n");
-}
-
 // ── Extension ─────────────────────────────────────────────────────────────
 export default function piDj(pi: ExtensionAPI) {
   let statusInterval: ReturnType<typeof setInterval> | null = null;
