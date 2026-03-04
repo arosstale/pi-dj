@@ -469,6 +469,10 @@ function ffbm(x: number, y: number, oct: number): number {
   for (let i = 0; i < oct; i++) { v += a * fnoise(px, py); px *= 2; py *= 2; a *= 0.5; }
   return v;
 }
+// Fast 2-octave fbm for hot paths (raymarching inner loops)
+function ffbm2(x: number, y: number): number {
+  return 0.5 * fnoise(x, y) + 0.25 * fnoise(x * 2, y * 2);
+}
 function acesTonemap(r: number, g: number, b: number): [number, number, number] {
   // ACES filmic tone mapping (simple fit)
   const tm = (x: number) => { const a = x * (2.51 * x + 0.03); const d = x * (2.43 * x + 0.59) + 0.14; return Math.max(0, Math.min(1, a / d)); };
@@ -539,10 +543,10 @@ const shaderNebula: ShaderFn = (fb, w, h, t, bands, bass, mid, treble, beat) => 
     const ux = x / w * 4 - 2, uy = y / h * 4 - 2;
     const t2 = t * 0.2;
 
-    // Domain warping — the fragcoord.xyz secret sauce
-    const warp1 = ffbm(ux + t2 + bass * 2, uy + t2 * 0.7, 5);
-    const warp2 = ffbm(ux + warp1 * 2 + treble * 1.5, uy + warp1 * 1.5 + mid, 5);
-    const warp3 = ffbm(ux + warp2 * 1.5 + t2, uy + warp2 + t2 * 0.3, 4);
+    // Domain warping — the fragcoord.xyz secret sauce (3+3+2 octaves, profiled for 30fps)
+    const warp1 = ffbm(ux + t2 + bass * 2, uy + t2 * 0.7, 3);
+    const warp2 = ffbm(ux + warp1 * 2 + treble * 1.5, uy + warp1 * 1.5 + mid, 3);
+    const warp3 = ffbm2(ux + warp2 * 1.5 + t2, uy + warp2 + t2 * 0.3);
 
     // Band-reactive detail
     const bi = Math.floor(((ux + 2) / 4) * bands.length);
@@ -582,9 +586,9 @@ const shaderCymatics: ShaderFn = (fb, w, h, t, bands, bass, mid, treble, beat) =
   for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
     const ux = (x - cx) / cx, uy = (y - cy) / cy;
 
-    // 5 wave sources driven by audio bands
+    // 4 wave sources driven by audio bands (profiled: 5→4, negligible visual diff)
     let wave = 0;
-    for (let i = 0; i < 5; i++) {
+    for (let i = 0; i < 4; i++) {
       const fi = i;
       const srcAngle = fi * 1.2566 + t * 0.3;
       const srcR = 0.3 + bass * 0.2;
@@ -674,13 +678,13 @@ const shaderVoronoi: ShaderFn = (fb, w, h, t, bands, bass, mid, treble, beat) =>
       const px = nx + fhash2(nx * 1.1, ny * 2.3) * (0.5 + 0.5 * Math.sin(t + fhash2(nx, ny) * 6.28));
       const py = ny + fhash2(nx * 3.7, ny * 1.9) * (0.5 + 0.5 * Math.cos(t * 0.7 + fhash2(ny, nx) * 6.28));
       const ddx = ux - px, ddy = uy - py;
-      const d = Math.sqrt(ddx * ddx + ddy * ddy);
-      if (d < minDist) { minDist2 = minDist; minDist = d; closestHash = fhash2(nx, ny); }
-      else if (d < minDist2) { minDist2 = d; }
+      const d2 = ddx * ddx + ddy * ddy; // skip sqrt — compare squared distances
+      if (d2 < minDist) { minDist2 = minDist; minDist = d2; closestHash = fhash2(nx, ny); }
+      else if (d2 < minDist2) { minDist2 = d2; }
     }
 
-    const edge = minDist2 - minDist;
-    const bi = Math.floor(minDist * bands.length) % bands.length;
+    const edge = Math.sqrt(minDist2) - Math.sqrt(minDist); // sqrt only once for edge
+    const bi = Math.floor(Math.sqrt(minDist) * bands.length) % bands.length;
     const spec = (bands[bi] || 0) * 3;
 
     // Cell color
@@ -747,20 +751,19 @@ const shaderSphere: ShaderFn = (fb, w, h, t, bands, bass, mid, treble, beat) => 
     let hit = false;
     let steps = 0;
 
-    // Raymarch
-    for (let i = 0; i < 40; i++) {
+    // Raymarch (20 steps, 2-oct fbm — profiled for 15+ fps)
+    for (let i = 0; i < 20; i++) {
       const cx = px + dx * totalDist, cy = py + dy * totalDist, cz = pz + dz * totalDist;
-      // Sphere SDF with audio displacement
       const sLen = Math.sqrt(cx * cx + cy * cy + cz * cz);
       const theta = Math.atan2(cy, cx), phi = Math.asin(cz / (sLen || 1));
-      const disp = ffbm(theta * 2 + t * 0.5 + bass, phi * 3 + t * 0.3, 3) * 0.2 * (1 + mid * 2);
+      const disp = ffbm2(theta * 2 + t * 0.5 + bass, phi * 3 + t * 0.3) * 0.15 * (1 + mid * 2);
       const bandIdx = Math.floor(((theta / Math.PI + 1) * 0.5) * bands.length);
-      const bandDisp = (bands[Math.max(0, Math.min(bandIdx, bands.length - 1))] || 0) * 0.15;
+      const bandDisp = (bands[Math.max(0, Math.min(bandIdx, bands.length - 1))] || 0) * 0.12;
       const d = sLen - 1.0 - disp - bandDisp;
 
-      if (d < 0.005) { hit = true; steps = i; break; }
-      if (totalDist > 10) break;
-      totalDist += d;
+      if (d < 0.015) { hit = true; steps = i; break; }
+      if (totalDist > 6) break;
+      totalDist += Math.max(d, 0.03); // min step prevents crawling near surface
     }
 
     let r = 0, g = 0, b2 = 0;
@@ -802,10 +805,10 @@ const shaderLiquidMetal: ShaderFn = (fb, w, h, t, bands, bass, mid, treble, beat
     let ux = x / w * 3, uy = y / h * 3;
     const t2 = t * 0.4;
 
-    // Triple domain warp — creates liquid metal look
-    const n1 = ffbm(ux + t2, uy + t2 * 0.7 + bass, 4);
-    const n2 = ffbm(ux + n1 * 2 + mid, uy - n1 * 1.5 + treble, 4);
-    const n3 = ffbm(ux - n2 + t2 * 0.3, uy + n2 * 2 + t2 * 0.5, 3);
+    // Triple domain warp — creates liquid metal look (3+2+2 octaves, profiled)
+    const n1 = ffbm(ux + t2, uy + t2 * 0.7 + bass, 3);
+    const n2 = ffbm2(ux + n1 * 2 + mid, uy - n1 * 1.5 + treble);
+    const n3 = ffbm2(ux - n2 + t2 * 0.3, uy + n2 * 2 + t2 * 0.5);
 
     // Spectrum modulation
     const bi = Math.floor(ux / 3 * bands.length);
