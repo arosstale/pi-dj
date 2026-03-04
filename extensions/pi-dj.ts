@@ -21,10 +21,8 @@
  *   /sc <url>             — download SoundCloud → MP3
  *   /bandcamp <url>       — download Bandcamp → MP3
  *   /bandlab <url>        — download BandLab track/album/collection → MP3
- *   /strudel <style> [key] [bpm] — live-coded algorithmic music (Strudel/TidalCycles)
+ *   /strudel <pattern> [--bpm N] [--wave saw] — live-coded music (Strudel/TidalCycles, pure CLI)
  *   /strudel-stop              — stop Strudel playback
- *   /strudel-mood <mood>       — shift mood (dark|euphoric|dreamy|aggressive|peaceful)
- *   /strudel-jam <layer>       — add jam layer (drums|bass|melody|pad|texture)
  *   /render <file|url> [style] — render music video with ffmpeg (bars|wave|circle|cqt)
  *   /subs <file> [style]       — transcribe + burn karaoke subtitles (whisper)
  *   /mix <a> <b> [s]      — crossfade two tracks with ffmpeg
@@ -986,80 +984,66 @@ export default function piDj(pi: ExtensionAPI) {
     },
   });
 
-  // ── Strudel (live coding) ────────────────────────────────────────────
-  function strudelCall(tool: string, args: Record<string, any> = {}): Promise<string> {
+  // ── Strudel (live coding — pure CLI, no browser) ────────────────────
+  let strudelProc: ChildProcess | null = null;
+  // Try local sibling project first, then fall back to npx
+  const STRUDEL_CLI = join(HOME, "Projects", "strudel-cli", "index.mjs");
+
+  function strudelPlay(pattern: string, opts: { bpm?: number; wave?: string; cycles?: number } = {}): Promise<string> {
     return new Promise((resolve) => {
-      const kvs = Object.entries(args).map(([k, v]) => `${k}=${typeof v === "string" ? v : JSON.stringify(v)}`);
-      const child = spawn("npx", ["mcporter", "call", `strudel.${tool}`, ...kvs], {
-        shell: true,
-        stdio: ["ignore", "pipe", "pipe"],
-        timeout: 60_000,
-      });
+      // Kill previous if still running
+      if (strudelProc) { try { strudelProc.kill(); } catch {} strudelProc = null; }
+
+      const args = [STRUDEL_CLI, pattern];
+      if (opts.bpm) args.push("--bpm", String(opts.bpm));
+      if (opts.wave) args.push("--wave", opts.wave);
+      args.push("--cycles", String(opts.cycles ?? 0)); // 0 = loop forever
+
+      // Check if strudel-cli exists locally, fallback to npx
+      const cmd = existsSync(STRUDEL_CLI) ? "node" : "npx";
+      const cliArgs = existsSync(STRUDEL_CLI) ? args : ["strudel-cli", pattern, ...(opts.bpm ? ["--bpm", String(opts.bpm)] : []), ...(opts.wave ? ["--wave", opts.wave] : []), "--cycles", String(opts.cycles ?? 0)];
+
+      strudelProc = spawn(cmd, cliArgs, { stdio: ["ignore", "pipe", "pipe"], shell: IS_WIN });
       let out = "";
-      child.stdout?.on("data", (d: Buffer) => { out += d.toString(); });
-      child.stderr?.on("data", (d: Buffer) => { out += d.toString(); });
-      child.on("close", () => resolve(out.trim()));
-      child.on("error", (e) => resolve(`Error: ${e.message}`));
+      strudelProc.stdout?.on("data", (d: Buffer) => { out += d.toString(); });
+      strudelProc.stderr?.on("data", (d: Buffer) => { out += d.toString(); });
+      strudelProc.on("close", () => { strudelProc = null; resolve(out.trim()); });
+      strudelProc.on("error", (e) => { strudelProc = null; resolve(`Error: ${e.message}`); });
+
+      // Resolve immediately with "playing" since it's streaming audio
+      setTimeout(() => resolve(`▶ Playing: ${pattern}`), 500);
     });
   }
 
   pi.registerCommand("strudel", {
-    description: "Live code music with Strudel. Usage: /strudel <style> [key] [bpm] — Styles: techno, house, dnb, ambient, trap, jungle, jazz",
+    description: "Live code music with Strudel mini-notation. Usage: /strudel <pattern> [--bpm N] [--wave sine|saw|square|triangle]",
     handler: async (args, ctx) => {
-      const parts = (args || "").trim().split(/\s+/);
-      const style = parts[0] || "techno";
-      const key   = parts[1] || "C";
-      const bpm   = parts[2] ? parseInt(parts[2]) : undefined;
+      const input = (args || "").trim();
+      if (!input) { ctx.ui.notify("Usage: /strudel bd*4, ~ cp ~ cp, hh*8  [--bpm 140] [--wave saw]", "info"); return; }
 
-      ctx.ui.notify(`🎹 Strudel: composing ${style} in ${key}${bpm ? ` at ${bpm} BPM` : ""}…`, "info");
+      // Parse --flags from the pattern
+      let bpm: number | undefined;
+      let wave: string | undefined;
+      let cycles: number | undefined;
+      let pattern = input;
 
-      const bpmArg: Record<string, any> = { style, key, auto_play: true };
-      if (bpm) bpmArg.bpm = bpm;
-      const result = strudelCall("compose", bpmArg);
-      result.then((r) => {
-        try {
-          const data = JSON.parse(r);
-          if (data.success) {
-            ctx.ui.notify(`🎹 Strudel: ${data.message || "playing"}`, "info");
-          } else {
-            ctx.ui.notify(`🎹 Strudel error: ${r}`, "error");
-          }
-        } catch {
-          ctx.ui.notify(`🎹 Strudel: ${r.slice(0, 200)}`, r.includes("Error") ? "error" : "info");
-        }
-      });
+      const bpmMatch = pattern.match(/--bpm\s+(\d+)/);
+      if (bpmMatch) { bpm = parseInt(bpmMatch[1]); pattern = pattern.replace(bpmMatch[0], "").trim(); }
+      const waveMatch = pattern.match(/--wave\s+(\w+)/);
+      if (waveMatch) { wave = waveMatch[1]; pattern = pattern.replace(waveMatch[0], "").trim(); }
+      const cyclesMatch = pattern.match(/--cycles\s+(\d+)/);
+      if (cyclesMatch) { cycles = parseInt(cyclesMatch[1]); pattern = pattern.replace(cyclesMatch[0], "").trim(); }
+
+      ctx.ui.notify(`🎹 Strudel: ${pattern}${bpm ? ` @ ${bpm} BPM` : ""}${wave ? ` (${wave})` : ""}`, "info");
+      await strudelPlay(pattern, { bpm, wave, cycles });
     },
   });
 
   pi.registerCommand("strudel-stop", {
     description: "Stop Strudel playback",
     handler: async (_a, ctx) => {
-      const r = await strudelCall("stop");
-      ctx.ui.notify(`🎹 Strudel stopped`, "info");
-    },
-  });
-
-  pi.registerCommand("strudel-mood", {
-    description: "Shift Strudel mood. Usage: /strudel-mood <dark|euphoric|melancholic|aggressive|dreamy|peaceful|energetic>",
-    handler: async (args, ctx) => {
-      const mood = (args || "").trim() || "euphoric";
-      ctx.ui.notify(`🎹 Shifting mood → ${mood}…`, "info");
-      const r = await strudelCall("shift_mood", { target_mood: mood });
-      ctx.ui.notify(`🎹 Mood: ${mood}`, "info");
-    },
-  });
-
-  pi.registerCommand("strudel-jam", {
-    description: "Add a jam layer. Usage: /strudel-jam <drums|bass|melody|pad|texture> [style hint]",
-    handler: async (args, ctx) => {
-      const parts = (args || "").trim().split(/\s+/);
-      const layer = parts[0] || "drums";
-      const hint  = parts.slice(1).join(" ") || undefined;
-      ctx.ui.notify(`🎹 Jamming: adding ${layer}…`, "info");
-      const a: Record<string, any> = { layer, auto_play: true };
-      if (hint) a.style_hint = hint;
-      const r = await strudelCall("jam_with", a);
-      ctx.ui.notify(`🎹 Jam: ${layer} added`, "info");
+      if (strudelProc) { try { strudelProc.kill(); } catch {} strudelProc = null; }
+      ctx.ui.notify("🎹 Strudel stopped", "info");
     },
   });
 
@@ -1093,11 +1077,11 @@ export default function piDj(pi: ExtensionAPI) {
         `/sc <url>             SoundCloud → MP3\n` +
         `/bandcamp <url>       Bandcamp → MP3\n` +
         `/bandlab <url>        BandLab track/album/collection → MP3\n\n` +
-        `LIVE CODING (Strudel)\n` +
-        `/strudel <style> [key] [bpm]  compose + play (techno|house|dnb|ambient|trap|jungle|jazz)\n` +
-        `/strudel-stop                 stop playback\n` +
-        `/strudel-mood <mood>          shift mood (dark|euphoric|dreamy|aggressive|peaceful)\n` +
-        `/strudel-jam <layer> [hint]   add layer (drums|bass|melody|pad|texture)\n\n` +
+        `LIVE CODING (Strudel — no browser, pure CLI)\n` +
+        `/strudel <pattern> [--bpm N] [--wave saw]  play mini-notation\n` +
+        `/strudel-stop                               stop playback\n` +
+        `  patterns: bd*4, ~ cp ~ cp, hh*8  |  c3 e3 g3 b3  |  <c3 e3>(3,8)\n` +
+        `  drums: bd sd/sn cp hh oh rim ride  |  waves: sine saw square triangle\n\n` +
         `PRODUCTION\n` +
         `/render <f> [style]   music video via ffmpeg (bars|wave|circle|cqt)\n` +
         `/subs <f> [style]     transcribe + karaoke subtitles (whisper)\n` +
@@ -1151,65 +1135,31 @@ export default function piDj(pi: ExtensionAPI) {
     name: "dj_strudel",
     label: "DJ Strudel",
     description:
-      "Generate and play live-coded algorithmic music via Strudel (TidalCycles port). " +
-      "Launches a browser-based Strudel session and plays the pattern immediately. " +
-      "Styles: techno, house, dnb, ambient, trap, jungle, jazz, experimental. " +
-      "Use dj_strudel_control for mood shifts, jam layers, refine, and stop.",
+      "Play live-coded algorithmic music via Strudel mini-notation (TidalCycles port). " +
+      "Pure CLI — no browser, synthesizes directly to audio via ffplay. " +
+      "Drum sounds: bd (kick), sd/sn (snare), cp (clap), hh (hat), oh (open hat), rim, ride. " +
+      "Notes: c3, d#4, eb2, etc. Waveforms: sine, saw, square, triangle. " +
+      "Use dj_strudel_stop to stop playback.",
     parameters: Type.Object({
-      style: Type.String({ description: "Music style: techno, house, dnb, ambient, trap, jungle, jazz, experimental" }),
-      key: Type.Optional(Type.String({ description: "Musical key (default: C). Valid: C, C#, D, D#, E, F, F#, G, G#, A, A#, B" })),
-      bpm: Type.Optional(Type.Number({ description: "Tempo in BPM (default: genre-appropriate)" })),
+      pattern: Type.String({ description: 'Strudel mini-notation pattern, e.g. "bd*4, ~ cp ~ cp, hh*8" or "c3 e3 g3 b3"' }),
+      bpm: Type.Optional(Type.Number({ description: "Tempo in BPM (default: 120)" })),
+      wave: Type.Optional(Type.String({ description: "Waveform for notes: sine, saw, square, triangle (default: sine)" })),
+      cycles: Type.Optional(Type.Number({ description: "Number of cycles to play (default: 4, 0 = loop)" })),
     }),
     async execute(_id, params) {
-      const args: Record<string, any> = { style: params.style, auto_play: true };
-      if (params.key) args.key = params.key;
-      if (params.bpm) args.bpm = params.bpm;
-      const r = await strudelCall("compose", args);
-      try {
-        const data = JSON.parse(r);
-        if (data.success) return { content: [{ type: "text", text: `🎹 Strudel: ${data.message}\nPattern: ${(data.pattern || "").slice(0, 300)}…` }] };
-        return { content: [{ type: "text", text: `Strudel error: ${r}` }], isError: true };
-      } catch {
-        return { content: [{ type: "text", text: r.slice(0, 500) }], isError: r.includes("Error") };
-      }
+      const r = await strudelPlay(params.pattern, { bpm: params.bpm, wave: params.wave, cycles: params.cycles });
+      return { content: [{ type: "text" as const, text: `🎹 ${r}` }] };
     },
   });
 
   pi.registerTool({
-    name: "dj_strudel_control",
-    label: "DJ Strudel Control",
-    description:
-      "Control a running Strudel session. Actions: stop, mood (shift mood), jam (add layer), refine (faster/slower/louder/quieter/brighter/darker), energy (0-10 scale).",
-    parameters: Type.Object({
-      action: Type.String({ description: "Action: stop | mood | jam | refine | energy" }),
-      value: Type.Optional(Type.String({ description: "For mood: dark/euphoric/melancholic/aggressive/dreamy/peaceful/energetic. For jam: drums/bass/melody/pad/texture. For refine: faster/slower/louder/quieter/brighter/darker. For energy: 0-10." })),
-      style_hint: Type.Optional(Type.String({ description: "Style hint for jam layer (e.g. 'funky', 'minimal')" })),
-    }),
-    async execute(_id, params) {
-      const { action, value, style_hint } = params;
-      let r: string;
-      switch (action) {
-        case "stop":
-          r = await strudelCall("stop");
-          return { content: [{ type: "text", text: "🎹 Strudel stopped" }] };
-        case "mood":
-          r = await strudelCall("shift_mood", { target_mood: value || "euphoric" });
-          return { content: [{ type: "text", text: `🎹 Mood → ${value}` }] };
-        case "jam": {
-          const args: Record<string, any> = { layer: value || "drums", auto_play: true };
-          if (style_hint) args.style_hint = style_hint;
-          r = await strudelCall("jam_with", args);
-          return { content: [{ type: "text", text: `🎹 Jam: ${value} layer added` }] };
-        }
-        case "refine":
-          r = await strudelCall("refine", { direction: value || "faster" });
-          return { content: [{ type: "text", text: `🎹 Refined: ${value}` }] };
-        case "energy":
-          r = await strudelCall("set_energy", { level: parseInt(value || "5") });
-          return { content: [{ type: "text", text: `🎹 Energy → ${value}` }] };
-        default:
-          return { content: [{ type: "text", text: `Unknown action: ${action}. Use: stop|mood|jam|refine|energy` }], isError: true };
-      }
+    name: "dj_strudel_stop",
+    label: "DJ Strudel Stop",
+    description: "Stop the currently playing Strudel pattern.",
+    parameters: Type.Object({}),
+    async execute() {
+      if (strudelProc) { try { strudelProc.kill(); } catch {} strudelProc = null; }
+      return { content: [{ type: "text" as const, text: "🎹 Strudel stopped" }] };
     },
   });
 
