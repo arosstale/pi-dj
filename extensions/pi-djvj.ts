@@ -453,6 +453,385 @@ const shaderParticles: ShaderFn = (fb,w,h,_t,bands,bass,_m,_tr,beat) => {
   if(bass>0.1&&PARTICLES.length<300){for(let i=0;i<Math.floor(bass*5);i++){const bi=Math.floor(Math.random()*bands.length),level=(bands[bi]||0);const[r,g,b]=hsl(bi/bands.length,1,0.5+level*0.3);PARTICLES.push({x:Math.random()*w,y:h-1,vx:(Math.random()-0.5)*4,vy:-(2+level*8+Math.random()*3),life:0.6+Math.random()*0.4,r,g,b});}}
   for(let i=PARTICLES.length-1;i>=0;i--){const p=PARTICLES[i];p.vy+=0.15;p.x+=p.vx;p.y+=p.vy;p.life-=0.02;if(p.y>=h-1){p.y=h-1;p.vy*=-0.5;p.vx*=0.9;}if(p.x<0){p.x=0;p.vx*=-0.8;}if(p.x>=w){p.x=w-1;p.vx*=-0.8;}if(p.life<=0){PARTICLES.splice(i,1);continue;}const alpha=p.life;setPixel(fb,w,p.x|0,p.y|0,p.r*alpha,p.g*alpha,p.b*alpha);setPixel(fb,w,(p.x-p.vx*0.5)|0,(p.y-p.vy*0.5)|0,p.r*alpha*0.4,p.g*alpha*0.4,p.b*alpha*0.4);}};
 
+// ── fragcoord.xyz-inspired shaders (CPU raymarching / SDF / volumetric) ────
+
+// Shared math for advanced shaders
+function fhash(n: number): number { return ((Math.sin(n) * 43758.5453) % 1 + 1) % 1; }
+function fhash2(x: number, y: number): number { return fhash(x * 127.1 + y * 311.7); }
+function fnoise(x: number, y: number): number {
+  const ix = Math.floor(x), iy = Math.floor(y), fx = x - ix, fy = y - iy;
+  const sx = fx * fx * (3 - 2 * fx), sy = fy * fy * (3 - 2 * fy);
+  const a = fhash2(ix, iy), b = fhash2(ix + 1, iy), c = fhash2(ix, iy + 1), d = fhash2(ix + 1, iy + 1);
+  return a + (b - a) * sx + (c - a) * sy + (a - b - c + d) * sx * sy;
+}
+function ffbm(x: number, y: number, oct: number): number {
+  let v = 0, a = 0.5, px = x, py = y;
+  for (let i = 0; i < oct; i++) { v += a * fnoise(px, py); px *= 2; py *= 2; a *= 0.5; }
+  return v;
+}
+function acesTonemap(r: number, g: number, b: number): [number, number, number] {
+  // ACES filmic tone mapping (simple fit)
+  const tm = (x: number) => { const a = x * (2.51 * x + 0.03); const d = x * (2.43 * x + 0.59) + 0.14; return Math.max(0, Math.min(1, a / d)); };
+  return [tm(r) * 255, tm(g) * 255, tm(b) * 255];
+}
+
+// 17: Black Hole — gravitational lensing + accretion disk
+const shaderBlackHole: ShaderFn = (fb, w, h, t, bands, bass, mid, treble, beat) => {
+  const cx = w / 2, cy = h / 2, aspect = w / (h * 2); // terminal chars are ~2:1
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    let ux = (x - cx) / cx, uy = (y - cy) / cy / aspect;
+    const dist = Math.sqrt(ux * ux + uy * uy);
+    const angle = Math.atan2(uy, ux);
+
+    // Gravitational lensing — bend UV toward center
+    const rs = 0.15 + bass * 0.05; // Schwarzschild radius
+    const bendFactor = dist > rs ? rs * rs / (dist * dist) : 1;
+    const lensedDist = dist + bendFactor * 0.3;
+    const lensedAngle = angle + bendFactor * 2.0 / (dist + 0.01) * 0.15;
+
+    let r = 0, g = 0, b2 = 0;
+
+    // Accretion disk — thin ring with doppler shift
+    const diskR = 0.25 + bass * 0.08;
+    const diskWidth = 0.12 + mid * 0.06;
+    const diskDist = Math.abs(lensedDist - diskR);
+    if (diskDist < diskWidth && Math.abs(uy) < 0.15 + treble * 0.05) {
+      const diskIntensity = (1 - diskDist / diskWidth) * (1 - Math.abs(uy) / 0.2);
+      const doppler = 0.5 + 0.5 * Math.cos(lensedAngle - t * 2); // blueshift/redshift
+      const diskSpec = (bands[Math.floor((lensedAngle / Math.PI + 1) * 0.5 * bands.length) % bands.length] || 0) * 2;
+      r += diskIntensity * (1.8 + doppler * 1.5 + diskSpec) * (0.8 + beat * 0.5);
+      g += diskIntensity * (0.4 + doppler * 0.3 + diskSpec * 0.3);
+      b2 += diskIntensity * (0.2 + (1 - doppler) * 0.8);
+    }
+
+    // Photon ring — bright ring at ~1.5× Schwarzschild
+    const photonR = rs * 2.5;
+    const photonGlow = Math.exp(-Math.pow((lensedDist - photonR) * 12, 2)) * (0.8 + beat * 0.6);
+    r += photonGlow * 1.2; g += photonGlow * 0.6; b2 += photonGlow * 0.3;
+
+    // Event horizon — pure black
+    if (dist < rs) { r = 0; g = 0; b2 = 0; }
+
+    // Starfield background (warped)
+    if (dist > rs * 1.2) {
+      const starX = Math.floor(lensedAngle * 20 + t * 0.1);
+      const starY = Math.floor(lensedDist * 30);
+      if (fhash2(starX, starY) > 0.985) {
+        const starBright = 0.3 + treble * 0.4;
+        r += starBright; g += starBright; b2 += starBright * 1.2;
+      }
+    }
+
+    // Jet — vertical plasma jets
+    if (Math.abs(ux) < 0.03 + bass * 0.02 && Math.abs(uy) > rs) {
+      const jetIntensity = Math.exp(-Math.abs(ux) * 30) * Math.exp(-Math.abs(uy) * 2) * (0.5 + mid);
+      r += jetIntensity * 0.3; g += jetIntensity * 0.5; b2 += jetIntensity * 1.5;
+    }
+
+    const [tr, tg, tb] = acesTonemap(r, g, b2);
+    setPixel(fb, w, x, y, tr, tg, tb);
+  }
+};
+
+// 18: Nebula — volumetric gas clouds with domain warping
+const shaderNebula: ShaderFn = (fb, w, h, t, bands, bass, mid, treble, beat) => {
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const ux = x / w * 4 - 2, uy = y / h * 4 - 2;
+    const t2 = t * 0.2;
+
+    // Domain warping — the fragcoord.xyz secret sauce
+    const warp1 = ffbm(ux + t2 + bass * 2, uy + t2 * 0.7, 5);
+    const warp2 = ffbm(ux + warp1 * 2 + treble * 1.5, uy + warp1 * 1.5 + mid, 5);
+    const warp3 = ffbm(ux + warp2 * 1.5 + t2, uy + warp2 + t2 * 0.3, 4);
+
+    // Band-reactive detail
+    const bi = Math.floor(((ux + 2) / 4) * bands.length);
+    const bandVal = (bands[Math.max(0, Math.min(bi, bands.length - 1))] || 0) * 2;
+
+    // Color layers — deep space nebula palette
+    let r = 0, g = 0, b2 = 0;
+    r += warp1 * 0.8 * (0.6 + bass * 0.8);
+    g += warp2 * 0.4 * (0.3 + mid * 0.6);
+    b2 += warp3 * 1.2 * (0.5 + treble * 0.8);
+
+    // Hot gas emission
+    const emission = Math.pow(Math.max(0, warp2 * 2 - 0.5), 2) * (1 + bandVal);
+    r += emission * 1.5; g += emission * 0.3;
+
+    // Cool gas absorption
+    const absorption = Math.pow(Math.max(0, warp3), 3);
+    b2 += absorption * 0.8; g += absorption * 0.2;
+
+    // Star seeds in low-density regions
+    if (warp1 < 0.3 && fhash2(Math.floor(x * 0.5), Math.floor(y * 0.5)) > 0.992) {
+      const bright = 0.5 + treble * 0.5;
+      r += bright; g += bright; b2 += bright;
+    }
+
+    // Beat pulse
+    r *= 1 + beat * 0.3; g *= 1 + beat * 0.2; b2 *= 1 + beat * 0.15;
+
+    const [tr, tg, tb] = acesTonemap(r * 0.7, g * 0.7, b2 * 0.7);
+    setPixel(fb, w, x, y, tr, tg, tb);
+  }
+};
+
+// 19: Cymatics — wave interference patterns (Chladni plates)
+const shaderCymatics: ShaderFn = (fb, w, h, t, bands, bass, mid, treble, beat) => {
+  const cx = w / 2, cy = h / 2;
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const ux = (x - cx) / cx, uy = (y - cy) / cy;
+
+    // 5 wave sources driven by audio bands
+    let wave = 0;
+    for (let i = 0; i < 5; i++) {
+      const fi = i;
+      const srcAngle = fi * 1.2566 + t * 0.3;
+      const srcR = 0.3 + bass * 0.2;
+      const srcX = Math.cos(srcAngle) * srcR, srcY = Math.sin(srcAngle) * srcR;
+      const dx = ux - srcX, dy = uy - srcY;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      const freq = 8 + fi * 4 + treble * 20;
+      wave += Math.sin(dist * freq - t * (2 + mid * 4)) / (1 + dist * 6);
+    }
+
+    // Spectrum modulation
+    const bi = Math.floor(((Math.atan2(uy, ux) / Math.PI + 1) * 0.5) * bands.length);
+    const bandVal = (bands[Math.max(0, Math.min(bi, bands.length - 1))] || 0) * 3;
+    wave += bandVal * 0.3;
+
+    const v = wave * 0.5 + 0.5;
+
+    // Interference color mapping — cyan/magenta/white nodes
+    let r = 0, g = 0, b2 = 0;
+    if (v > 0.6) { // constructive — hot
+      const t2 = (v - 0.6) / 0.4;
+      r = 1.0 * t2 * (1 + beat); g = 0.2 * t2; b2 = 0.6 * t2;
+    } else if (v > 0.3) { // mid
+      const t2 = (v - 0.3) / 0.3;
+      r = 0.1 * t2; g = 0.4 * t2; b2 = 0.8 * t2;
+    } else { // destructive — dark cyan
+      r = 0; g = 0.8 * v; b2 = 1.0 * v * 0.3;
+    }
+
+    r *= 0.8 + bass * 0.6; g *= 0.8 + mid * 0.4; b2 *= 0.8 + treble * 0.4;
+
+    // Vignette
+    const vdist = Math.sqrt(ux * ux + uy * uy);
+    const vignette = 1 - vdist * 0.4;
+    setPixel(fb, w, x, y, r * vignette * 255, g * vignette * 255, b2 * vignette * 255);
+  }
+};
+
+// 20: Aurora — flowing ribbons of light with fbm displacement
+const shaderAurora: ShaderFn = (fb, w, h, t, bands, bass, mid, treble, beat) => {
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const ux = x / w, uy = y / h;
+    let r = 0.02, g = 0.01, b2 = 0.05; // dark sky base
+
+    // 4 aurora layers with fbm displacement
+    for (let i = 0; i < 4; i++) {
+      const fi = i;
+      const yDisp = fnoise(ux * (2 + fi) + t * 0.3, fi * 10 + t * 0.15) * (0.3 + bass * 0.2);
+      const bandY = uy + yDisp;
+      const bandDist = Math.abs(bandY - 0.5 - fi * 0.05);
+      const band = Math.max(0, 1 - bandDist * 10);
+
+      const spec = (bands[Math.floor(ux * bands.length) % bands.length] || 0) * 2;
+
+      const cr = i === 0 ? 0 : i === 1 ? 0 : i === 2 ? 0.5 : 1.0;
+      const cg = i === 0 ? 1.0 : i === 1 ? 0.5 : i === 2 ? 0 : 0;
+      const cb = i === 0 ? 0.5 : i === 1 ? 1.0 : i === 2 ? 1.0 : 0.5;
+
+      const intensity = band * (0.5 + spec * 0.8 + mid * 0.3);
+      r += cr * intensity; g += cg * intensity; b2 += cb * intensity;
+    }
+
+    // Stars
+    if (fhash2(Math.floor(x * 0.5), Math.floor(y * 0.5)) > 0.997) {
+      const sb = 0.5 + treble * 0.5;
+      r += sb; g += sb; b2 += sb;
+    }
+
+    // Beat pulse
+    r += 0.1 * beat; g += 0.05 * beat; b2 += 0.15 * beat;
+
+    const [tr, tg, tb] = acesTonemap(r, g, b2);
+    setPixel(fb, w, x, y, tr, tg, tb);
+  }
+};
+
+// 21: Voronoi — reactive tessellation (fragcoord-style, not my simpler rings)
+const shaderVoronoi: ShaderFn = (fb, w, h, t, bands, bass, mid, treble, beat) => {
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const ux = x / w * (4 + bass * 2), uy = y / h * (4 + bass * 2);
+    const cellX = Math.floor(ux), cellY = Math.floor(uy);
+
+    let minDist = 10, minDist2 = 10, closestHash = 0;
+
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+      const nx = cellX + dx, ny = cellY + dy;
+      const px = nx + fhash2(nx * 1.1, ny * 2.3) * (0.5 + 0.5 * Math.sin(t + fhash2(nx, ny) * 6.28));
+      const py = ny + fhash2(nx * 3.7, ny * 1.9) * (0.5 + 0.5 * Math.cos(t * 0.7 + fhash2(ny, nx) * 6.28));
+      const ddx = ux - px, ddy = uy - py;
+      const d = Math.sqrt(ddx * ddx + ddy * ddy);
+      if (d < minDist) { minDist2 = minDist; minDist = d; closestHash = fhash2(nx, ny); }
+      else if (d < minDist2) { minDist2 = d; }
+    }
+
+    const edge = minDist2 - minDist;
+    const bi = Math.floor(minDist * bands.length) % bands.length;
+    const spec = (bands[bi] || 0) * 3;
+
+    // Cell color
+    const cr = 0.5 * closestHash + 0.5 * (1 - closestHash);
+    const cg = 0.3 * (1 - closestHash);
+    const cb = 0.6 * closestHash;
+
+    let r = cr * spec * (0.5 + mid);
+    let g = cg * spec * (0.5 + mid);
+    let b2 = cb * spec * (0.5 + mid);
+
+    // Edge glow
+    const edgeGlow = Math.max(0, 1 - edge * 20) * (0.5 + beat);
+    r += 0.8 * edgeGlow; g += 0.9 * edgeGlow; b2 += 1.0 * edgeGlow;
+
+    r += 0.2 * beat; g += 0.1 * beat; b2 += 0.3 * beat;
+    setPixel(fb, w, x, y, Math.min(255, r * 255), Math.min(255, g * 255), Math.min(255, b2 * 255));
+  }
+};
+
+// 22: Fractal Flame — mandelbrot with audio-reactive zoom/color
+const shaderFractal: ShaderFn = (fb, w, h, t, bands, bass, mid, treble, beat) => {
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const ux = (x - w / 2) / (w / 2), uy = (y - h / 2) / (h / 2);
+    const zoom = 2.5 - bass * 0.5;
+    const cr = ux * zoom + (-0.745 + Math.sin(t * 0.05) * 0.005);
+    const ci = uy * zoom + (0.186 + Math.cos(t * 0.07) * 0.005);
+
+    let zr = 0, zi = 0, iter = 0;
+    const maxIter = 60;
+    for (let i = 0; i < maxIter; i++) {
+      const zr2 = zr * zr - zi * zi + cr;
+      const zi2 = 2 * zr * zi + ci;
+      zr = zr2; zi = zi2;
+      if (zr * zr + zi * zi > 4) { iter = i; break; }
+      iter = i;
+    }
+
+    const frac = iter / maxIter;
+    // Smooth coloring with audio modulation
+    const hue = frac * 6.28 + t * 0.3 + bass * 3;
+    const rr = 0.5 + 0.5 * Math.cos(hue);
+    const gg = 0.5 + 0.5 * Math.cos(hue + 2.094 + mid * 3);
+    const bb = 0.5 + 0.5 * Math.cos(hue + 4.189 + treble * 3);
+    const brightness = (1 - frac) * (1 + beat * 0.5);
+
+    setPixel(fb, w, x, y, rr * brightness * 255, gg * brightness * 255, bb * brightness * 255);
+  }
+};
+
+// 23: Raymarched Sphere — 3D SDF sphere with reactive surface
+const shaderSphere: ShaderFn = (fb, w, h, t, bands, bass, mid, treble, beat) => {
+  const aspect = w / (h * 2);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    // Ray direction
+    const ux = (2 * x / w - 1) * aspect, uy = -(2 * y / h - 1);
+    const rdx = ux, rdy = uy, rdz = -1.5;
+    const rdLen = Math.sqrt(rdx * rdx + rdy * rdy + rdz * rdz);
+    const dx = rdx / rdLen, dy = rdy / rdLen, dz = rdz / rdLen;
+
+    // Camera
+    let px = 0, py = 0, pz = 3;
+    let totalDist = 0;
+    let hit = false;
+    let steps = 0;
+
+    // Raymarch
+    for (let i = 0; i < 40; i++) {
+      const cx = px + dx * totalDist, cy = py + dy * totalDist, cz = pz + dz * totalDist;
+      // Sphere SDF with audio displacement
+      const sLen = Math.sqrt(cx * cx + cy * cy + cz * cz);
+      const theta = Math.atan2(cy, cx), phi = Math.asin(cz / (sLen || 1));
+      const disp = ffbm(theta * 2 + t * 0.5 + bass, phi * 3 + t * 0.3, 3) * 0.2 * (1 + mid * 2);
+      const bandIdx = Math.floor(((theta / Math.PI + 1) * 0.5) * bands.length);
+      const bandDisp = (bands[Math.max(0, Math.min(bandIdx, bands.length - 1))] || 0) * 0.15;
+      const d = sLen - 1.0 - disp - bandDisp;
+
+      if (d < 0.005) { hit = true; steps = i; break; }
+      if (totalDist > 10) break;
+      totalDist += d;
+    }
+
+    let r = 0, g = 0, b2 = 0;
+    if (hit) {
+      const hx = px + dx * totalDist, hy = py + dy * totalDist, hz = pz + dz * totalDist;
+      // Normal (approximate via gradient)
+      const nLen = Math.sqrt(hx * hx + hy * hy + hz * hz);
+      const nx = hx / nLen, ny = hy / nLen, nz = hz / nLen;
+
+      // Lighting — key + fill + rim
+      const lx = 0.5, ly = 0.7, lz = 0.3, lLen = Math.sqrt(lx * lx + ly * ly + lz * lz);
+      const ndotl = Math.max(0, nx * lx / lLen + ny * ly / lLen + nz * lz / lLen);
+      const fill = Math.max(0, ny * 0.3 + 0.2);
+      const rim = Math.pow(1 - Math.max(0, -(nx * dx + ny * dy + nz * dz)), 3) * 0.6;
+
+      // Surface color from audio
+      const theta2 = Math.atan2(hy, hx);
+      const hue = (theta2 / Math.PI + 1) * 0.5 + t * 0.05;
+      r = (0.5 + 0.5 * Math.cos(hue * 6.28)) * (ndotl + fill) + rim * (0.5 + beat);
+      g = (0.5 + 0.5 * Math.cos(hue * 6.28 + 2.094)) * (ndotl + fill) + rim * 0.3;
+      b2 = (0.5 + 0.5 * Math.cos(hue * 6.28 + 4.189)) * (ndotl + fill) + rim * (0.8 + treble);
+
+      // AO approximation
+      const ao = 1 - steps / 40 * 0.5;
+      r *= ao; g *= ao; b2 *= ao;
+    } else {
+      // Background — dark gradient
+      r = 0.02; g = 0.01 + uy * 0.02; b2 = 0.05 + uy * 0.03;
+    }
+
+    const [tr, tg, tb] = acesTonemap(r, g, b2);
+    setPixel(fb, w, x, y, tr, tg, tb);
+  }
+};
+
+// 24: Liquid Metal — chrome-like reflections with domain warping
+const shaderLiquidMetal: ShaderFn = (fb, w, h, t, bands, bass, mid, treble, beat) => {
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    let ux = x / w * 3, uy = y / h * 3;
+    const t2 = t * 0.4;
+
+    // Triple domain warp — creates liquid metal look
+    const n1 = ffbm(ux + t2, uy + t2 * 0.7 + bass, 4);
+    const n2 = ffbm(ux + n1 * 2 + mid, uy - n1 * 1.5 + treble, 4);
+    const n3 = ffbm(ux - n2 + t2 * 0.3, uy + n2 * 2 + t2 * 0.5, 3);
+
+    // Spectrum modulation
+    const bi = Math.floor(ux / 3 * bands.length);
+    const bandVal = (bands[Math.max(0, Math.min(bi, bands.length - 1))] || 0) * 2;
+
+    // Chrome gradient — silver with colored highlights
+    const v = n3 * (1 + bandVal * 0.5);
+    const edge = Math.abs(n2 - 0.5) * 4; // sharp edges = chrome reflections
+
+    let r = 0.6 + edge * 0.4 + n1 * 0.3;
+    let g = 0.6 + edge * 0.35 + n2 * 0.2;
+    let b2 = 0.7 + edge * 0.3 + n3 * 0.4;
+
+    // Color tint from audio
+    r += bass * 0.3 * v; g += mid * 0.2 * v; b2 += treble * 0.4 * v;
+
+    // Specular highlights
+    if (edge > 0.8) { r += 0.4; g += 0.4; b2 += 0.4; }
+
+    r *= 0.5 + beat * 0.2; g *= 0.5 + beat * 0.15; b2 *= 0.5 + beat * 0.1;
+
+    const [tr, tg, tb] = acesTonemap(r, g, b2);
+    setPixel(fb, w, x, y, tr, tg, tb);
+  }
+};
+
 const SHADERS: { name: string; fn: ShaderFn }[] = [
   { name: "Spectrum",     fn: shaderSpectrum     },
   { name: "Radial",       fn: shaderRadial        },
@@ -470,6 +849,15 @@ const SHADERS: { name: string; fn: ShaderFn }[] = [
   { name: "Kaleidoscope", fn: shaderKaleidoscope  },
   { name: "Vortex",       fn: shaderVortex        },
   { name: "Particles",    fn: shaderParticles     },
+  // ── fragcoord.xyz-grade shaders ──
+  { name: "Black Hole",   fn: shaderBlackHole     },
+  { name: "Nebula",       fn: shaderNebula        },
+  { name: "Cymatics",     fn: shaderCymatics      },
+  { name: "Aurora",       fn: shaderAurora        },
+  { name: "Voronoi",      fn: shaderVoronoi       },
+  { name: "Fractal",      fn: shaderFractal       },
+  { name: "3D Sphere",    fn: shaderSphere        },
+  { name: "Liquid Metal", fn: shaderLiquidMetal   },
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -778,7 +1166,7 @@ export default function (pi: ExtensionAPI) {
   pi.registerCommand("viz", {
     description: [
       "Terminal audio-reactive visualizer. Reacts to mpv (pi-dj) or mic.",
-      "16 half-block shaders + 6 braille modes + ASCII mode.",
+      "24 half-block shaders (incl. raymarched 3D, black hole, nebula, voronoi) + 6 braille modes + ASCII mode.",
       "Keys: N/P=shader  v=mode  a=ascii  b=braille  1-9 0=jump  +-=sens  F=fullscreen  Q=quit",
       "Usage: /viz        — embedded in pi TUI",
       "       /viz full   — fullscreen alt-screen mode",
