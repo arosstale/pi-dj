@@ -330,7 +330,7 @@ function hsl(h: number, s: number, l: number): [number,number,number] {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// HALF-BLOCK SHADERS (44 total)
+// HALF-BLOCK SHADERS (52 total)
 // ─────────────────────────────────────────────────────────────────────────────
 
 type ShaderFn = (fb: Uint8Array, w: number, h: number, t: number,
@@ -1679,6 +1679,389 @@ const shaderCoral: ShaderFn = (fb, w, h, t, bands, bass, mid, treble, beat) => {
   }
 };
 
+// ═══════════════════════════════════════════════════════════════════════════
+// ✦ ART PIECES II — cinematic, atmospheric, surreal
+// ═══════════════════════════════════════════════════════════════════════════
+
+// 45: Lava Lamp — warm metaballs with slow viscous motion and thermal glow
+const shaderLavaLamp: ShaderFn = (fb, w, h, t, bands, bass, mid, treble, beat) => {
+  const nBlobs = 5;
+  const cx: number[] = [], cy: number[] = [], rr: number[] = [];
+  for (let i = 0; i < nBlobs; i++) {
+    // Very slow sinusoidal motion — lava lamp is lazy
+    cx[i] = w * (0.35 + 0.3 * Math.sin(t * 0.12 + i * 2.5));
+    cy[i] = h * (0.15 + 0.7 * (0.5 + 0.5 * Math.sin(t * 0.08 + i * 1.9 + bass)));
+    rr[i] = 10 + Math.sin(t * 0.15 + i * 3.1) * 4 + mid * 6 + beat * 3;
+  }
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    let field = 0;
+    for (let i = 0; i < nBlobs; i++) {
+      const dx = (x - cx[i]) * 0.5, dy = y - cy[i];
+      field += rr[i] * rr[i] / (dx * dx + dy * dy + 1);
+    }
+    // Lava lamp palette: warm amber → deep orange → magenta → dark
+    const uy = y / h;
+    const bg_r = 0.08 + uy * 0.04, bg_g = 0.02, bg_b = 0.05 + (1 - uy) * 0.06;
+    let r, g, b2;
+    if (field > 1.2) {
+      // Inside blob — hot
+      const v = Math.min((field - 1.2) / 3, 1);
+      r = 1.0; g = 0.4 + v * 0.5; b2 = 0.1 + v * 0.3;
+      const glow = v * (0.6 + beat * 0.4);
+      r += glow * 0.2; g += glow * 0.3;
+    } else if (field > 0.8) {
+      // Edge glow
+      const v = (field - 0.8) / 0.4;
+      r = bg_r + v * 0.8; g = bg_g + v * 0.2; b2 = bg_b + v * 0.15;
+    } else {
+      r = bg_r; g = bg_g; b2 = bg_b;
+    }
+    // Glass container highlight (subtle vertical light)
+    const containerX = Math.abs(x / w - 0.5) * 2;
+    if (containerX > 0.85) { const edge = (containerX - 0.85) / 0.15; r += edge * 0.05; g += edge * 0.05; b2 += edge * 0.07; }
+    const [tr, tg, tb] = acesTonemap(r, g, b2);
+    setPixel(fb, w, x, y, tr, tg, tb);
+  }
+};
+
+// 46: Silk — flowing fabric with iridescent sheen
+const shaderSilk: ShaderFn = (fb, w, h, t, bands, bass, mid, treble, beat) => {
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const ux = x / w, uy = y / h;
+    // Layered sine folds — each layer is a fold in the fabric
+    let fold = 0;
+    for (let i = 0; i < 5; i++) {
+      const freq = 2 + i * 1.5;
+      const phase = t * (0.2 + i * 0.08) + i * 1.7;
+      const bi = Math.floor((i / 5) * bands.length);
+      const bv = (bands[Math.min(bi, bands.length - 1)] || 0) * 2;
+      fold += Math.sin(ux * freq + Math.sin(uy * (freq * 0.7) + phase) * (1.5 + bv)) * (1 / (i + 1));
+    }
+    fold = fold * 0.5 + 0.5; // normalize to 0-1
+    // Iridescent color shift — hue changes with fold angle (like real silk)
+    const hue = (fold * 0.4 + ux * 0.1 + t * 0.02) % 1;
+    // Highlights on fold peaks
+    const foldDeriv = Math.abs(Math.cos(fold * Math.PI * 4));
+    const highlight = Math.pow(foldDeriv, 8) * (0.3 + treble * 0.5);
+    const lightness = 0.2 + fold * 0.25 + highlight + bass * 0.1 + beat * 0.08;
+    const saturation = 0.7 + (1 - highlight) * 0.2;
+    const [cr, cg, cb] = hsl(hue, saturation, Math.min(0.85, lightness));
+    setPixel(fb, w, x, y, cr, cg, cb);
+  }
+};
+
+// 47: Rainstorm — rain streaks, distant lightning, rolling clouds
+const STORM_STREAKS: { x: number; y: number; speed: number; len: number }[] = [];
+const STORM_FLASH = { age: 999, x: 0.5 };
+const shaderRainstorm: ShaderFn = (fb, w, h, t, bands, bass, mid, treble, beat) => {
+  // Storm sky — dark rolling clouds via fbm
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const ux = x / w, uy = y / h;
+    if (uy < 0.55) {
+      // Cloud layer
+      const cloud = ffbm2(ux * 3 + t * 0.15, uy * 2 + t * 0.05);
+      const cloud2 = fnoise(ux * 5 + t * 0.2, uy * 3 - t * 0.1);
+      const v = cloud * 0.6 + cloud2 * 0.4;
+      const darkness = 0.15 + v * 0.2 + bass * 0.05;
+      setPixel(fb, w, x, y, darkness * 80, darkness * 80, darkness * 110);
+    } else {
+      // Ground — dark with rain reflection
+      const ground = 0.03 + (1 - uy) * 0.02;
+      setPixel(fb, w, x, y, ground * 60, ground * 60, ground * 80);
+    }
+  }
+  // Lightning flash on heavy beat
+  if (beat > 0.6 && STORM_FLASH.age > 15) { STORM_FLASH.age = 0; STORM_FLASH.x = 0.3 + Math.random() * 0.4; }
+  STORM_FLASH.age++;
+  if (STORM_FLASH.age < 6) {
+    const flash = (1 - STORM_FLASH.age / 6) * 0.4;
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      const dist = Math.abs(x / w - STORM_FLASH.x);
+      const f = flash * Math.exp(-dist * 4) * (1 - y / h * 0.5);
+      const i = (y * w + x) * 3;
+      fb[i] = Math.min(255, fb[i] + f * 255); fb[i + 1] = Math.min(255, fb[i + 1] + f * 240); fb[i + 2] = Math.min(255, fb[i + 2] + f * 255);
+    }
+    // Bolt — jagged line from flash point
+    let bx = STORM_FLASH.x * w;
+    for (let by = 0; by < h * 0.5; by++) {
+      bx += (Math.random() - 0.5) * 6;
+      const bright = (1 - STORM_FLASH.age / 6) * 255;
+      setPixel(fb, w, bx | 0, by, bright, bright, bright);
+      setPixel(fb, w, (bx - 1) | 0, by, bright * 0.5, bright * 0.5, bright * 0.8);
+      setPixel(fb, w, (bx + 1) | 0, by, bright * 0.5, bright * 0.5, bright * 0.8);
+    }
+  }
+  // Rain streaks
+  const spawnRate = 8 + Math.floor(mid * 15);
+  for (let i = 0; i < spawnRate && STORM_STREAKS.length < 500; i++) {
+    STORM_STREAKS.push({ x: Math.random() * w, y: -Math.random() * 5, speed: 2 + Math.random() * 2, len: 3 + Math.floor(Math.random() * 4) });
+  }
+  for (let i = STORM_STREAKS.length - 1; i >= 0; i--) {
+    const s = STORM_STREAKS[i];
+    s.y += s.speed; s.x -= s.speed * 0.3; // wind
+    if (s.y > h + s.len) { STORM_STREAKS.splice(i, 1); continue; }
+    for (let d = 0; d < s.len; d++) {
+      const fade = (1 - d / s.len) * 0.5;
+      setPixel(fb, w, (s.x + d * 0.3) | 0, (s.y - d) | 0, 140 * fade, 150 * fade, 180 * fade);
+    }
+  }
+};
+
+// 48: Ember — dying fire with floating embers rising into night
+const EMBERS: { x: number; y: number; vx: number; vy: number; life: number; bright: number }[] = [];
+const shaderEmber: ShaderFn = (fb, w, h, t, bands, bass, mid, treble, beat) => {
+  // Night sky at top, warm glow at bottom
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const uy = y / h;
+    // Bottom glow from fire
+    const fireGlow = Math.exp(-(1 - uy) * 3) * (0.3 + bass * 0.4);
+    const r = fireGlow * 0.8 + 0.01;
+    const g = fireGlow * 0.3;
+    const b2 = 0.02 + (1 - uy) * 0.04;
+    setPixel(fb, w, x, y, r * 255, g * 255, b2 * 255);
+  }
+  // Fire at bottom — layered noise
+  for (let x = 0; x < w; x++) {
+    const ux = x / w;
+    const bi = Math.floor(ux * bands.length);
+    const bv = (bands[Math.min(bi, bands.length - 1)] || 0) * 3;
+    const fireH = (0.08 + bv * 0.12 + bass * 0.06) * h;
+    for (let fy = 0; fy < fireH; fy++) {
+      const py = h - 1 - fy;
+      const frac = fy / fireH;
+      const flicker = fnoise(x * 0.1 + t * 3, fy * 0.2 + t * 5);
+      const r = (1 - frac * 0.4) * (0.8 + flicker * 0.2);
+      const g = (0.6 - frac * 0.5) * (0.7 + flicker * 0.3);
+      const b2 = frac < 0.2 ? 0.2 * (1 - frac * 5) : 0;
+      setPixel(fb, w, x, py, r * 255, g * 255, b2 * 255);
+    }
+  }
+  // Spawn embers
+  const rate = 3 + Math.floor(beat * 15 + bass * 8);
+  for (let i = 0; i < rate && EMBERS.length < 200; i++) {
+    EMBERS.push({ x: w * (0.2 + Math.random() * 0.6), y: h - 3, vx: (Math.random() - 0.5) * 2, vy: -(1 + Math.random() * 2), life: 1, bright: 0.5 + Math.random() * 0.5 });
+  }
+  for (let i = EMBERS.length - 1; i >= 0; i--) {
+    const e = EMBERS[i];
+    e.x += e.vx + Math.sin(t * 2 + i * 0.7) * 0.5; // thermal drift
+    e.y += e.vy;
+    e.vy -= 0.01; // accelerate upward
+    e.life -= 0.008;
+    if (e.life <= 0 || e.y < 0) { EMBERS.splice(i, 1); continue; }
+    const bright = e.life * e.bright * (0.7 + beat * 0.3);
+    // Ember color: white → orange → red → dark
+    const cr = bright > 0.5 ? 255 : bright * 2 * 255;
+    const cg = bright > 0.6 ? 200 * bright : bright * 0.6 * 255;
+    const cb = bright > 0.7 ? 100 * bright : 0;
+    setPixel(fb, w, e.x | 0, e.y | 0, cr, cg, cb);
+    // Tiny glow
+    setPixel(fb, w, (e.x - 1) | 0, e.y | 0, cr * 0.3, cg * 0.3, cb * 0.3);
+    setPixel(fb, w, (e.x + 1) | 0, e.y | 0, cr * 0.3, cg * 0.3, cb * 0.3);
+  }
+};
+
+// 49: Prism — light beam splitting into rainbow, Pink Floyd style
+const shaderPrism: ShaderFn = (fb, w, h, t, bands, bass, mid, treble, beat) => {
+  fb.fill(0); // black void
+  const cx = w * 0.38, cy = h * 0.5;
+  const prismW = 16, prismH = 20;
+  // Incoming white beam (from left)
+  const beamY = cy;
+  const beamWidth = 1.5 + bass * 0.8;
+  for (let x = 0; x < cx - prismW; x++) {
+    const bright = 0.5 + treble * 0.3 + beat * 0.2;
+    for (let dy = -beamWidth; dy <= beamWidth; dy++) {
+      const fade = (1 - Math.abs(dy) / beamWidth) * bright;
+      setPixel(fb, w, x, (beamY + dy) | 0, 255 * fade, 255 * fade, 255 * fade);
+    }
+  }
+  // Prism triangle
+  for (let py = -prismH; py <= prismH; py++) {
+    const rowW = prismW * (1 - Math.abs(py) / prismH);
+    for (let px = -rowW; px <= rowW; px++) {
+      setPixel(fb, w, (cx + px) | 0, (cy + py) | 0, 20, 25, 40);
+    }
+    // Prism edges
+    setPixel(fb, w, (cx - rowW) | 0, (cy + py) | 0, 60, 70, 90);
+    setPixel(fb, w, (cx + rowW) | 0, (cy + py) | 0, 60, 70, 90);
+  }
+  // Rainbow fan (from right side of prism)
+  const nRays = 7;
+  const rainbowHues = [0.0, 0.07, 0.12, 0.33, 0.55, 0.7, 0.8]; // ROYGBIV
+  const spread = 0.35 + bass * 0.15 + beat * 0.1;
+  for (let ri = 0; ri < nRays; ri++) {
+    const angle = (ri / (nRays - 1) - 0.5) * spread;
+    const [cr, cg, cb] = hsl(rainbowHues[ri], 1, 0.5);
+    const bi = Math.floor((ri / nRays) * bands.length);
+    const bv = (bands[Math.min(bi, bands.length - 1)] || 0) * 3;
+    const rayBright = 0.5 + bv * 0.3 + beat * 0.2;
+    for (let d = 0; d < w * 0.55; d++) {
+      const px = cx + prismW + d;
+      const py = cy + Math.sin(angle) * d * 0.7;
+      if (px >= w) break;
+      const fade = Math.min(1, d / 15) * rayBright; // fade in from prism
+      const thickness = 0.8 + d * 0.005 + bv * 0.5;
+      for (let dy = -thickness; dy <= thickness; dy++) {
+        const tf = (1 - Math.abs(dy) / thickness) * fade;
+        setPixel(fb, w, px | 0, (py + dy) | 0, cr * tf, cg * tf, cb * tf);
+      }
+    }
+  }
+};
+
+// 50: Dreamscape — surreal floating islands in a pastel sky
+const shaderDreamscape: ShaderFn = (fb, w, h, t, bands, bass, mid, treble, beat) => {
+  // Pastel gradient sky
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const uy = y / h;
+    const skyH = (0.55 + uy * 0.15 + t * 0.005) % 1;
+    const [cr, cg, cb] = hsl(skyH, 0.4, 0.7 + (1 - uy) * 0.15);
+    setPixel(fb, w, x, y, cr, cg, cb);
+  }
+  // Soft clouds
+  for (let y = 0; y < h * 0.6; y++) for (let x = 0; x < w; x++) {
+    const cloud = ffbm2(x / w * 4 + t * 0.08, y / h * 3 + t * 0.03);
+    if (cloud > 0.55) {
+      const v = (cloud - 0.55) / 0.45;
+      const i = (y * w + x) * 3;
+      fb[i] = Math.min(255, fb[i] + v * 80); fb[i + 1] = Math.min(255, fb[i + 1] + v * 75); fb[i + 2] = Math.min(255, fb[i + 2] + v * 90);
+    }
+  }
+  // 3 floating islands at different depths
+  const islands = [
+    { x: 0.25, y: 0.55, w2: 0.2, bob: 0.7 },
+    { x: 0.6, y: 0.45, w2: 0.15, bob: 1.1 },
+    { x: 0.85, y: 0.6, w2: 0.1, bob: 0.9 },
+  ];
+  for (const isl of islands) {
+    const bi2 = Math.floor(isl.x * bands.length);
+    const bv = (bands[Math.min(bi2, bands.length - 1)] || 0) * 2;
+    const iy = h * (isl.y + Math.sin(t * 0.3 * isl.bob + isl.x * 5) * 0.03 + bv * 0.02);
+    const iw = w * isl.w2;
+    // Island top (green)
+    for (let dx = -iw; dx <= iw; dx++) {
+      const frac = Math.abs(dx) / iw;
+      const topY = iy - (1 - frac * frac) * 4;
+      const px = w * isl.x + dx | 0;
+      for (let dy = 0; dy < 3; dy++) setPixel(fb, w, px, (topY + dy) | 0, 60 + bv * 30, 140 + bv * 40, 50);
+      // Underside (brown rock, hanging)
+      const hangLen = (1 - frac * frac) * 8 + bv * 2;
+      for (let dy = 3; dy < 3 + hangLen; dy++) {
+        const rf = dy / (3 + hangLen);
+        setPixel(fb, w, px, (topY + dy) | 0, 100 * (1 - rf), 70 * (1 - rf), 40 * (1 - rf));
+      }
+    }
+    // Tiny waterfall from island
+    if (bv > 0.3) {
+      const fallX = w * isl.x | 0;
+      for (let fy = iy + 5 | 0; fy < iy + 5 + bv * 15 | 0; fy++) {
+        const shimmer = 0.6 + 0.4 * Math.sin(fy * 0.5 + t * 8);
+        setPixel(fb, w, fallX, fy, 150 * shimmer, 200 * shimmer, 255 * shimmer);
+      }
+    }
+  }
+};
+
+// 51: Neon City — cyberpunk cityscape with reflections
+const shaderNeonCity: ShaderFn = (fb, w, h, t, bands, bass, mid, treble, beat) => {
+  const horizonY = Math.floor(h * 0.55);
+  // Dark purple sky
+  for (let y = 0; y < horizonY; y++) for (let x = 0; x < w; x++) {
+    const uy = y / horizonY;
+    setPixel(fb, w, x, y, 10 + uy * 15, 5 + uy * 5, 20 + uy * 25);
+  }
+  // Buildings — procedural skyline
+  for (let bx = 0; bx < w; bx += 4) {
+    const bIdx = Math.floor(bx / 4);
+    const buildingH = Math.floor(fhash(bIdx * 7.7) * h * 0.35 + h * 0.1);
+    const buildingW = 3 + Math.floor(fhash(bIdx * 13.3) * 3);
+    const topY = horizonY - buildingH;
+    const bi = Math.floor((bx / w) * bands.length);
+    const bv = (bands[Math.min(bi, bands.length - 1)] || 0) * 3;
+    // Building body
+    for (let y = topY; y < horizonY; y++) for (let dx = 0; dx < buildingW && bx + dx < w; dx++) {
+      setPixel(fb, w, bx + dx, y, 15, 12, 25);
+    }
+    // Neon accents on buildings — audio reactive
+    const neonHue = fhash(bIdx * 31.1);
+    const [nr, ng, nb] = hsl(neonHue, 1, 0.5);
+    const glow = 0.3 + bv * 0.5 + beat * 0.3;
+    // Window row
+    for (let wy = topY + 2; wy < horizonY - 1; wy += 3) {
+      if (fhash(bIdx * 17 + wy * 3.3) > 0.5) {
+        for (let dx = 1; dx < buildingW - 1 && bx + dx < w; dx++)
+          setPixel(fb, w, bx + dx, wy, nr * glow * 0.3, ng * glow * 0.3, nb * glow * 0.3);
+      }
+    }
+    // Roof neon strip
+    for (let dx = 0; dx < buildingW && bx + dx < w; dx++)
+      setPixel(fb, w, bx + dx, topY, nr * glow, ng * glow, nb * glow);
+  }
+  // Wet street with reflections
+  for (let y = horizonY; y < h; y++) {
+    const reflY = horizonY - (y - horizonY); // mirror Y
+    const distort = Math.sin(y * 0.5 + t * 3) * 1.5;
+    const reflFade = 0.4 * Math.exp(-(y - horizonY) * 0.08);
+    for (let x = 0; x < w; x++) {
+      const rx = Math.min(w - 1, Math.max(0, x + distort | 0));
+      if (reflY >= 0 && reflY < horizonY) {
+        const si = (reflY * w + rx) * 3, di = (y * w + x) * 3;
+        if (si + 2 < fb.length && di + 2 < fb.length) {
+          fb[di] = fb[si] * reflFade + 5; fb[di + 1] = fb[si + 1] * reflFade + 3; fb[di + 2] = fb[si + 2] * reflFade + 10;
+        }
+      } else {
+        setPixel(fb, w, x, y, 5, 3, 10);
+      }
+    }
+  }
+  // Horizontal neon reflection lines on street
+  for (let stripe = 0; stripe < 5; stripe++) {
+    const sy = horizonY + 3 + stripe * 4;
+    const bi = Math.floor((stripe / 5) * bands.length);
+    const bv = (bands[Math.min(bi, bands.length - 1)] || 0) * 4;
+    const [sr, sg, sb] = hsl((stripe * 0.2 + t * 0.05) % 1, 1, 0.3 + bv * 0.2);
+    if (sy < h) for (let x = 0; x < w; x++) setPixel(fb, w, x, sy, sr, sg, sb);
+  }
+};
+
+// 52: Wormhole — spiraling tunnel with depth and light at the end
+const shaderWormhole: ShaderFn = (fb, w, h, t, bands, bass, mid, treble, beat) => {
+  const cx = w / 2, cy = h / 2;
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const dx = (x - cx) / cx, dy = (y - cy) / cy * 2;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    const angle = Math.atan2(dy, dx);
+    if (dist < 0.01) { setPixel(fb, w, x, y, 255, 240, 200); continue; } // center light
+    // Tunnel depth — 1/r mapping
+    const depth = 1 / (dist + 0.1);
+    // Spiral twist — increases with depth
+    const twist = angle + depth * (2 + bass * 3) + t * (0.8 + mid * 0.5);
+    // Ring segments — create the tube wall pattern
+    const ringPattern = Math.sin(depth * 3 - t * 2) * 0.5 + 0.5;
+    const spiralPattern = Math.sin(twist * 6) * 0.5 + 0.5;
+    const combined = ringPattern * 0.6 + spiralPattern * 0.4;
+    // Audio modulation along the tube
+    const bi = Math.floor(((angle / Math.PI + 1) * 0.5) * bands.length) % bands.length;
+    const bv = (bands[Math.max(0, bi)] || 0) * 3;
+    // Color: deep purple walls → bright light at center
+    const depthFade = Math.exp(-dist * 1.5);
+    const wallBright = combined * (0.3 + bv * 0.4) * (1 - depthFade * 0.5);
+    const centerLight = depthFade * depthFade * (0.8 + beat * 0.5);
+    let r = wallBright * 0.4 + centerLight * 1.0;
+    let g = wallBright * 0.2 + centerLight * 0.9;
+    let b2 = wallBright * 0.8 + centerLight * 0.7;
+    // Edge energy (event horizon ring)
+    const ringDist = Math.abs(dist - 0.3);
+    if (ringDist < 0.05) {
+      const ringGlow = (1 - ringDist / 0.05) * (0.5 + treble * 0.5);
+      r += ringGlow * 0.3; g += ringGlow * 0.5; b2 += ringGlow * 0.8;
+    }
+    r *= 0.7 + beat * 0.3;
+    const [tr, tg, tb] = acesTonemap(r, g, b2);
+    setPixel(fb, w, x, y, tr, tg, tb);
+  }
+};
+
 const SHADERS: { name: string; fn: ShaderFn }[] = [
   { name: "Spectrum",     fn: shaderSpectrum     },
   { name: "Radial",       fn: shaderRadial        },
@@ -1728,6 +2111,15 @@ const SHADERS: { name: string; fn: ShaderFn }[] = [
   { name: "✦ Galaxy",      fn: shaderGalaxy        },
   { name: "✦ Fireflies",   fn: shaderFireflies     },
   { name: "✦ Coral",       fn: shaderCoral         },
+  // ── ✦ art pieces II ──
+  { name: "✦ Lava Lamp",   fn: shaderLavaLamp      },
+  { name: "✦ Silk",        fn: shaderSilk          },
+  { name: "✦ Rainstorm",   fn: shaderRainstorm     },
+  { name: "✦ Ember",       fn: shaderEmber         },
+  { name: "✦ Prism",       fn: shaderPrism         },
+  { name: "✦ Dreamscape",  fn: shaderDreamscape    },
+  { name: "✦ Neon City",   fn: shaderNeonCity      },
+  { name: "✦ Wormhole",    fn: shaderWormhole      },
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2036,7 +2428,7 @@ export default function (pi: ExtensionAPI) {
   pi.registerCommand("viz", {
     description: [
       "Terminal audio-reactive visualizer. Reacts to mpv (pi-dj) or mic.",
-      "44 half-block shaders (incl. ✦ art: jellyfish, stained glass, galaxy, fireflies, ocean, ink, coral, northern lights) + 6 braille + ASCII.",
+      "52 half-block shaders (16 ✦ art pieces incl. neon city, wormhole, prism, dreamscape, ember, silk, lava lamp, rainstorm) + 6 braille + ASCII.",
       "Keys: N/P=shader  v=mode  a=ascii  b=braille  1-9 0=jump  +-=sens  F=fullscreen  Q=quit",
       "Usage: /viz        — embedded in pi TUI",
       "       /viz full   — fullscreen alt-screen mode",
