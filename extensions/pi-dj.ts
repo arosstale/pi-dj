@@ -201,8 +201,8 @@ async function resolveTrack(query: string): Promise<{ title: string; url: string
   const arg = isUrl ? `"${query}"` : `"ytsearch:${query.replace(/"/g, '\\"')}"`;
   try {
     const out = execSync(
-      `${ytdlpBin()} ${arg} --print title --print webpage_url --no-playlist 2>/dev/null`,
-      { encoding: "utf-8", timeout: 20000 }
+      `${ytdlpBin()} ${arg} --print title --print webpage_url --no-playlist`,
+      { encoding: "utf-8", timeout: 20000, stdio: ["ignore", "pipe", "ignore"] }
     ).trim().split(/\r?\n/);
     return out[1] ? { title: out[0] || query, url: out[1] } : null;
   } catch { return null; }
@@ -212,8 +212,8 @@ async function resolveTrack(query: string): Promise<{ title: string; url: string
 async function resolvePlaylist(url: string): Promise<{ title: string; url: string }[]> {
   try {
     const out = execSync(
-      `${ytdlpBin()} "${url}" --flat-playlist --print title --print webpage_url --playlist-end 50 2>/dev/null`,
-      { encoding: "utf-8", timeout: 30000 }
+      `${ytdlpBin()} "${url}" --flat-playlist --print title --print webpage_url --playlist-end 50`,
+      { encoding: "utf-8", timeout: 30000, stdio: ["ignore", "pipe", "ignore"] }
     ).trim().split(/\r?\n/);
     const tracks: { title: string; url: string }[] = [];
     for (let i = 0; i + 1 < out.length; i += 2)
@@ -227,8 +227,8 @@ async function playTrack(url: string, title?: string): Promise<string> {
   killMpv();
   if (!title) {
     try {
-      title = execSync(`${ytdlpBin()} --print title "${url}" --no-playlist 2>/dev/null`,
-        { encoding: "utf-8", timeout: 10000 }).trim() || url;
+      title = execSync(`${ytdlpBin()} --print title "${url}" --no-playlist`,
+        { encoding: "utf-8", timeout: 10000, stdio: ["ignore", "pipe", "ignore"] }).trim() || url;
     } catch { title = url; }
   }
   currentTrack = { title, url };
@@ -303,14 +303,21 @@ interface RadioStation { name: string; url_resolved: string; country: string; ta
 // Search Radio Browser (https://api.radio-browser.info) — 30k+ stations, no key needed.
 // Tries country+tag split for multi-word queries, then falls back to tag+name merge.
 async function radioSearch(query: string): Promise<RadioStation[]> {
-  const RADIO_API = "https://de1.api.radio-browser.info/json";
+  const RADIO_APIS = [
+    "https://de1.api.radio-browser.info/json",
+    "https://nl1.api.radio-browser.info/json",
+    "https://at1.api.radio-browser.info/json",
+  ];
   const parts = query.split(/\s+/);
 
   async function search(endpoint: string): Promise<RadioStation[]> {
-    try {
-      const res = await fetch(`${RADIO_API}${endpoint}&hidebroken=true&order=votes&reverse=true&limit=5`);
-      return res.ok ? (await res.json() as RadioStation[]) : [];
-    } catch { return []; }
+    for (const api of RADIO_APIS) {
+      try {
+        const res = await fetch(`${api}${endpoint}&hidebroken=true&order=votes&reverse=true&limit=5`);
+        if (res.ok) return await res.json() as RadioStation[];
+      } catch { /* try next mirror */ }
+    }
+    return [];
   }
 
   // Multi-word: try last word as country, rest as tag
@@ -626,16 +633,16 @@ export default function piDj(pi: ExtensionAPI) {
         // Try librosa first
         const py = tools.python || "python3";
         const result = execSync(
-          `${py} -c "import librosa; y,sr=librosa.load('${file}'); t,_=librosa.beat.beat_track(y=y,sr=sr); print(f'{t:.1f}')" 2>/dev/null`,
-          { encoding: "utf-8", timeout: 30000 }
+          `${py} -c "import librosa; y,sr=librosa.load('${file}'); t,_=librosa.beat.beat_track(y=y,sr=sr); print(f'{t:.1f}')"`,
+          { encoding: "utf-8", timeout: 30000, stdio: ["ignore", "pipe", "ignore"] }
         ).trim();
         if (result) { ctx.ui.notify(`🥁 BPM: ${result}`, "success"); return; }
       } catch {}
       try {
         // bpm-tools fallback
         const result = execSync(
-          `sox "${file}" -t raw -r 44100 -e float -c 1 - 2>/dev/null | bpm`,
-          { encoding: "utf-8", timeout: 30000 }
+          `sox "${file}" -t raw -r 44100 -e float -c 1 - | bpm`,
+          { encoding: "utf-8", timeout: 30000, shell: IS_WIN ? "cmd.exe" : "/bin/sh" }
         ).trim();
         if (result) { ctx.ui.notify(`🥁 BPM: ${result}`, "success"); return; }
       } catch {}
@@ -681,8 +688,8 @@ export default function piDj(pi: ExtensionAPI) {
           const dlOut = execSync(
             `${ytdlpBin()} -x --audio-format mp3 --audio-quality 0` +
             ` -o "${join(musicDir, "Videos")}/%(title)s.%(ext)s"` +
-            ` --print after_move:filepath "${audioArg}" 2>/dev/null`,
-            { encoding: "utf-8", timeout: 120000 }
+            ` --print after_move:filepath "${audioArg}"`,
+            { encoding: "utf-8", timeout: 120000, stdio: ["ignore", "pipe", "ignore"] }
           ).trim().split(/\r?\n/).pop() || "";
           if (!dlOut || !existsSync(dlOut)) { ctx.ui.notify("Download failed", "error"); return; }
           audioFile = dlOut;
@@ -1027,7 +1034,7 @@ export default function piDj(pi: ExtensionAPI) {
         `/radio lyria          Lyria AI generative radio\n` +
         `/radio lyria chill    Lyria with preset\n` +
         `/radio <http url>     stream URL directly\n\n` +
-        `LOCAL FILES → /play (cliamp v1.14 TUI — file browser, Navidrome, webm, pipe-stream, search)\n\n` +
+        `LOCAL FILES → /play (cliamp v1.15 TUI — file browser, Navidrome, SoundCloud search, webm)\n\n` +
         `DOWNLOADS\n` +
         `/sc <url>             SoundCloud → MP3\n` +
         `/bandcamp <url>       Bandcamp → MP3\n` +
