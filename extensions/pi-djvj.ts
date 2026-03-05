@@ -330,7 +330,7 @@ function hsl(h: number, s: number, l: number): [number,number,number] {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// HALF-BLOCK SHADERS (30 total)
+// HALF-BLOCK SHADERS (36 total)
 // ─────────────────────────────────────────────────────────────────────────────
 
 type ShaderFn = (fb: Uint8Array, w: number, h: number, t: number,
@@ -1088,6 +1088,238 @@ const shaderGlitch: ShaderFn = (fb, w, h, t, bands, bass, mid, treble, beat) => 
     }
 };
 
+// 31: Metaballs — organic merging blobs, the demoscene classic
+const META_BLOBS = Array.from({ length: 7 }, (_, i) => ({
+  ax: 0.3 + i * 0.17, ay: 0.2 + i * 0.11, bx: 0.5 + i * 0.13, by: 0.7 + i * 0.09,
+}));
+const shaderMetaballs: ShaderFn = (fb, w, h, t, bands, bass, mid, treble, beat) => {
+  const nBlobs = 7;
+  // Move blob centers with audio
+  const cx: number[] = [], cy: number[] = [], rr: number[] = [];
+  for (let i = 0; i < nBlobs; i++) {
+    const b = META_BLOBS[i];
+    const bi = Math.floor((i / nBlobs) * bands.length);
+    const level = (bands[Math.min(bi, bands.length - 1)] || 0) * 2;
+    cx[i] = w * (0.5 + 0.35 * Math.sin(t * b.ax + i * 2.1 + bass * 3));
+    cy[i] = h * (0.5 + 0.35 * Math.cos(t * b.ay + i * 1.7 + mid * 2));
+    rr[i] = (8 + level * 12 + beat * 6) * (1 + bass * 0.5);
+  }
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    let field = 0;
+    for (let i = 0; i < nBlobs; i++) {
+      const dx = (x - cx[i]) * 0.5, dy = y - cy[i]; // 0.5x for aspect
+      field += rr[i] * rr[i] / (dx * dx + dy * dy + 1);
+    }
+    // Threshold + coloring
+    if (field > 1) {
+      const v = Math.min(field, 4) / 4;
+      const hue = (v * 0.3 + t * 0.05 + x / w * 0.1) % 1;
+      const [r, g, b2] = hsl(hue, 0.9, 0.3 + v * 0.4 * (0.8 + beat * 0.4));
+      setPixel(fb, w, x, y, r, g, b2);
+    } else {
+      // Dark background with subtle grid
+      setPixel(fb, w, x, y, 5, 5, 10 + field * 15);
+    }
+  }
+};
+
+// 32: Water Ripples — concentric interference from beat-triggered sources
+const RIPPLE_SOURCES: { x: number; y: number; birth: number }[] = [];
+let rippleFrame = 0;
+const shaderRipples: ShaderFn = (fb, w, h, _t, bands, bass, mid, treble, beat) => {
+  rippleFrame++;
+  // Spawn new source on beat
+  if (beat > 0.5 && (RIPPLE_SOURCES.length === 0 || rippleFrame - RIPPLE_SOURCES[RIPPLE_SOURCES.length - 1].birth > 8)) {
+    RIPPLE_SOURCES.push({ x: Math.random() * w, y: Math.random() * h, birth: rippleFrame });
+    if (RIPPLE_SOURCES.length > 6) RIPPLE_SOURCES.shift();
+  }
+  // Persistent sources at edges for bass
+  const permaX = [w * 0.2, w * 0.8, w * 0.5];
+  const permaY = [h * 0.5, h * 0.5, h * 0.2];
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    let wave = 0;
+    // Beat-triggered ripples
+    for (const src of RIPPLE_SOURCES) {
+      const age = (rippleFrame - src.birth) * 0.5;
+      const dx = (x - src.x) * 0.5, dy = y - src.y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      const decay = Math.exp(-age * 0.03) * Math.exp(-dist * 0.02);
+      wave += Math.sin(dist * 0.8 - age * 0.6) * decay;
+    }
+    // Permanent wave sources driven by bass/mid/treble
+    const levels = [bass, mid, treble];
+    for (let p = 0; p < 3; p++) {
+      const dx = (x - permaX[p]) * 0.5, dy = y - permaY[p];
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      wave += Math.sin(dist * (0.3 + levels[p] * 0.8) - rippleFrame * 0.15) * levels[p] * 0.6 / (1 + dist * 0.05);
+    }
+    // Color: deep blue water with wave highlights
+    const v = wave * 0.5 + 0.5;
+    const r = Math.max(0, v - 0.7) * 3 * 255 * (0.5 + beat * 0.5);
+    const g = v * 80 + Math.max(0, v - 0.5) * 200;
+    const b2 = 40 + v * 180;
+    setPixel(fb, w, x, y, r, g, b2);
+  }
+};
+
+// 33: Flow Field — particles following Perlin noise, colored by frequency
+const FLOW_PARTS: { x: number; y: number; age: number; hue: number }[] = [];
+const shaderFlowField: ShaderFn = (fb, w, h, t, bands, bass, mid, treble, beat) => {
+  // Slow fade for trails
+  for (let i = 0; i < fb.length; i++) fb[i] = (fb[i] * 0.92) | 0;
+  // Spawn particles
+  const spawn = 5 + Math.floor(bass * 15 + beat * 20);
+  for (let i = 0; i < spawn && FLOW_PARTS.length < 600; i++) {
+    FLOW_PARTS.push({
+      x: Math.random() * w, y: Math.random() * h,
+      age: 0, hue: Math.random(),
+    });
+  }
+  // Update + render
+  const speed = 1.5 + mid * 3 + beat * 2;
+  for (let i = FLOW_PARTS.length - 1; i >= 0; i--) {
+    const p = FLOW_PARTS[i];
+    // Flow angle from noise field
+    const nx = p.x / w * 3, ny = p.y / h * 3;
+    const angle = fnoise(nx + t * 0.3, ny + t * 0.2) * Math.PI * 4 + bass * 2;
+    p.x += Math.cos(angle) * speed * 2; // 2x for aspect
+    p.y += Math.sin(angle) * speed;
+    p.age++;
+    // Die if out of bounds or too old
+    if (p.x < 0 || p.x >= w || p.y < 0 || p.y >= h || p.age > 120) {
+      FLOW_PARTS.splice(i, 1); continue;
+    }
+    const alpha = Math.min(1, p.age / 5) * Math.max(0, 1 - p.age / 120);
+    const bi = Math.floor((p.x / w) * bands.length);
+    const level = (bands[Math.min(bi, bands.length - 1)] || 0) * 3;
+    const [cr, cg, cb] = hsl((p.hue + t * 0.02) % 1, 0.8, 0.4 + level * 0.3);
+    setPixel(fb, w, p.x | 0, p.y | 0, cr * alpha, cg * alpha, cb * alpha);
+  }
+};
+
+// 34: Lightning — recursive fractal arcs triggered by beats
+const BOLTS: { segments: { x1: number; y1: number; x2: number; y2: number; bright: number }[]; age: number }[] = [];
+function genBolt(x1: number, y1: number, x2: number, y2: number, depth: number, jitter: number): { x1: number; y1: number; x2: number; y2: number; bright: number }[] {
+  if (depth <= 0) return [{ x1, y1, x2, y2, bright: 1 }];
+  const mx = (x1 + x2) / 2 + (Math.random() - 0.5) * jitter;
+  const my = (y1 + y2) / 2 + (Math.random() - 0.5) * jitter * 0.5;
+  const segs = [...genBolt(x1, y1, mx, my, depth - 1, jitter * 0.6), ...genBolt(mx, my, x2, y2, depth - 1, jitter * 0.6)];
+  // Branch
+  if (depth > 2 && Math.random() < 0.3) {
+    const bx = mx + (Math.random() - 0.5) * jitter * 1.5;
+    const by = my + (Math.random() + 0.5) * jitter * 0.8;
+    segs.push(...genBolt(mx, my, bx, by, depth - 2, jitter * 0.5).map(s => ({ ...s, bright: s.bright * 0.5 })));
+  }
+  return segs;
+}
+const shaderLightning: ShaderFn = (fb, w, h, _t, bands, bass, _m, treble, beat) => {
+  // Fade
+  for (let i = 0; i < fb.length; i++) fb[i] = (fb[i] * 0.75) | 0;
+  // Spawn bolt on beat
+  if (beat > 0.4 && (BOLTS.length === 0 || BOLTS[BOLTS.length - 1].age > 5)) {
+    const x1 = w * (0.3 + Math.random() * 0.4), x2 = x1 + (Math.random() - 0.5) * w * 0.3;
+    BOLTS.push({ segments: genBolt(x1, 0, x2, h, 6, w * 0.15), age: 0 });
+    if (BOLTS.length > 4) BOLTS.shift();
+  }
+  // Render bolts
+  for (let bi = BOLTS.length - 1; bi >= 0; bi--) {
+    const bolt = BOLTS[bi]; bolt.age++;
+    if (bolt.age > 20) { BOLTS.splice(bi, 1); continue; }
+    const decay = Math.max(0, 1 - bolt.age / 20);
+    for (const seg of bolt.segments) {
+      const steps = Math.max(4, Math.floor(Math.sqrt((seg.x2 - seg.x1) ** 2 + (seg.y2 - seg.y1) ** 2)));
+      for (let s = 0; s <= steps; s++) {
+        const t2 = s / steps;
+        const px = seg.x1 + (seg.x2 - seg.x1) * t2;
+        const py = seg.y1 + (seg.y2 - seg.y1) * t2;
+        const b = decay * seg.bright;
+        // Core (white-blue)
+        setPixel(fb, w, px | 0, py | 0, 200 * b, 200 * b, 255 * b);
+        // Glow
+        setPixel(fb, w, (px - 1) | 0, py | 0, 80 * b, 80 * b, 180 * b);
+        setPixel(fb, w, (px + 1) | 0, py | 0, 80 * b, 80 * b, 180 * b);
+      }
+    }
+  }
+  // Ambient energy flicker from treble
+  if (treble > 0.3) {
+    for (let i = 0; i < Math.floor(treble * 20); i++) {
+      const fx = Math.floor(Math.random() * w), fy = Math.floor(Math.random() * h);
+      setPixel(fb, w, fx, fy, 40, 40, 80 * treble);
+    }
+  }
+};
+
+// 35: Spectrogram — scrolling waterfall frequency display (cava-style)
+const SPECTRO_HIST: Float32Array[] = [];
+const shaderSpectrogram: ShaderFn = (fb, w, h, _t, bands, bass, _m, _tr, beat) => {
+  // Push current frame's bands to history
+  const snap = new Float32Array(bands.length);
+  for (let i = 0; i < bands.length; i++) snap[i] = bands[i];
+  SPECTRO_HIST.push(snap);
+  if (SPECTRO_HIST.length > w) SPECTRO_HIST.shift();
+  // Render: x = time (right = now), y = frequency (bottom = low)
+  fb.fill(0);
+  for (let x = 0; x < SPECTRO_HIST.length; x++) {
+    const col = SPECTRO_HIST[x];
+    const screenX = w - SPECTRO_HIST.length + x;
+    if (screenX < 0) continue;
+    for (let y = 0; y < h; y++) {
+      const bi = Math.floor(((h - 1 - y) / h) * col.length);
+      const level = Math.min(1, (col[Math.min(bi, col.length - 1)] || 0) * 5);
+      if (level < 0.02) continue;
+      // Heatmap: black → blue → cyan → green → yellow → red → white
+      let r = 0, g = 0, b2 = 0;
+      if (level < 0.2) { b2 = level * 5 * 255; }
+      else if (level < 0.4) { const t2 = (level - 0.2) * 5; b2 = 255; g = t2 * 255; }
+      else if (level < 0.6) { const t2 = (level - 0.4) * 5; g = 255; b2 = (1 - t2) * 255; }
+      else if (level < 0.8) { const t2 = (level - 0.6) * 5; g = 255; r = t2 * 255; }
+      else { const t2 = (level - 0.8) * 5; r = 255; g = (1 - t2 * 0.5) * 255; b2 = t2 * 255; }
+      setPixel(fb, w, screenX, y, r, g, b2);
+    }
+  }
+};
+
+// 36: Saturn Ring — circular spectrum (inspired by cava's orion shader)
+const shaderSaturn: ShaderFn = (fb, w, h, t, bands, bass, mid, treble, beat) => {
+  const cx = w / 2, cy = h / 2, aspect = w / (h * 2);
+  const baseR = Math.min(cx, cy) * 0.45;
+  const maxLen = baseR * 0.5;
+  fb.fill(0);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const dx = (x - cx) / aspect, dy = (y - cy) * 2; // correct for terminal aspect
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    const angle = Math.atan2(dy, dx);
+    // Map angle to bar index
+    const a = ((angle + Math.PI) / (Math.PI * 2));
+    const bi = Math.floor(a * bands.length) % bands.length;
+    const level = Math.min(1, (bands[bi] || 0) * 5) * (1 + beat * 0.3);
+    const barLen = 3 + level * maxLen;
+    // Ring: draw if dist is between baseR and baseR + barLen
+    if (dist > baseR - 2 && dist < baseR + barLen) {
+      const frac = (dist - baseR) / barLen;
+      // Gradient: bottom is bright, top fades
+      const bright = Math.max(0, 1 - frac * 0.7) * (0.6 + level * 0.4);
+      const [cr, cg, cb] = hsl((a + t * 0.03) % 1, 0.9, 0.4);
+      setPixel(fb, w, x, y, cr * bright, cg * bright, cb * bright);
+    }
+    // Inner glow (core energy)
+    if (dist < baseR - 2) {
+      const coreEnergy = bass * 0.4 + mid * 0.3;
+      const coreDist = dist / baseR;
+      const glow = Math.pow(1 - coreDist, 2) * coreEnergy;
+      setPixel(fb, w, x, y, glow * 100, glow * 60, glow * 200);
+    }
+  }
+  // Highlight ring edge
+  for (let s = 0; s < 360; s++) {
+    const angle = (s / 360) * Math.PI * 2;
+    const px = cx + Math.cos(angle) * baseR * aspect | 0;
+    const py = cy + Math.sin(angle) * baseR * 0.5 | 0;
+    setPixel(fb, w, px, py, 60 + beat * 100, 60 + beat * 80, 80 + beat * 120);
+  }
+};
+
 const SHADERS: { name: string; fn: ShaderFn }[] = [
   { name: "Spectrum",     fn: shaderSpectrum     },
   { name: "Radial",       fn: shaderRadial        },
@@ -1121,6 +1353,13 @@ const SHADERS: { name: string; fn: ShaderFn }[] = [
   { name: "Terrain",     fn: shaderTerrain        },
   { name: "Supernova",   fn: shaderSupernova      },
   { name: "Glitch",      fn: shaderGlitch         },
+  // ── research batch (demoscene + cava-inspired) ──
+  { name: "Metaballs",   fn: shaderMetaballs      },
+  { name: "Ripples",     fn: shaderRipples        },
+  { name: "Flow Field",  fn: shaderFlowField      },
+  { name: "Lightning",   fn: shaderLightning      },
+  { name: "Spectrogram", fn: shaderSpectrogram    },
+  { name: "Saturn Ring", fn: shaderSaturn         },
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1429,7 +1668,7 @@ export default function (pi: ExtensionAPI) {
   pi.registerCommand("viz", {
     description: [
       "Terminal audio-reactive visualizer. Reacts to mpv (pi-dj) or mic.",
-      "30 half-block shaders (incl. raymarched 3D, black hole, nebula, terrain, supernova, glitch) + 6 braille modes + ASCII mode.",
+      "36 half-block shaders (incl. metaballs, lightning, spectrogram, saturn ring, flow field, ripples) + 6 braille modes + ASCII mode.",
       "Keys: N/P=shader  v=mode  a=ascii  b=braille  1-9 0=jump  +-=sens  F=fullscreen  Q=quit",
       "Usage: /viz        — embedded in pi TUI",
       "       /viz full   — fullscreen alt-screen mode",
