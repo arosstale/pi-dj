@@ -26,7 +26,7 @@
  *   /render <file|url> [style] — render music video with ffmpeg (bars|wave|circle|cqt)
  *   /subs <file> [style]       — transcribe + burn karaoke subtitles (whisper)
  *   /mix <a> <b> [s]      — crossfade two tracks with ffmpeg
- *   /trim <f> <s> [e]     — trim audio clip
+ *   /trim                 — (moved to pi-ffmpeg)
  *   /bpm <file>           — detect BPM
  *   /radio <genre|name|country|url> — global internet radio (Radio Browser)
  *   /radio lyria [preset]           — Lyria AI generative radio
@@ -35,7 +35,7 @@
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
-import { execSync, spawn, type ChildProcess } from "node:child_process";
+import { execSync, execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { existsSync, readFileSync, mkdirSync } from "node:fs";
 import { homedir, platform, tmpdir } from "node:os";
 import { join, basename, extname, dirname } from "node:path";
@@ -279,10 +279,10 @@ async function togglePause() {
 async function ytdlpDownload(url: string, outDir: string, ctx: any): Promise<boolean> {
   if (!tools.ytdlp) { ctx.ui.notify("yt-dlp not found. pip install yt-dlp", "warning"); return false; }
   try {
-    execSync(
-      `${ytdlpBin()} -x --audio-format mp3 --audio-quality 0 -o "${outDir}/%(uploader)s/%(album,)s%(track_number& - ,)s%(title)s.%(ext)s" "${url}" 2>&1`,
-      { timeout: 120000, encoding: "utf-8" }
-    );
+    execFileSync(ytdlpBin(), [
+      "-x", "--audio-format", "mp3", "--audio-quality", "0",
+      "-o", `${outDir}/%(uploader)s/%(album,)s%(track_number& - ,)s%(title)s.%(ext)s`, url,
+    ], { timeout: 120000, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] });
     ctx.ui.notify(`✅ Downloaded to ${outDir}`, "success");
     return true;
   } catch (e: any) {
@@ -522,9 +522,9 @@ export default function piDj(pi: ExtensionAPI) {
       ctx.ui.notify("☁️ Downloading...", "info");
       try {
         if (tools.scdl) {
-          execSync(`scdl -l "${url}" --path "${outDir}" --mp3 --onlymp3 2>&1`, { timeout: 120000, encoding: "utf-8" });
+          execFileSync("scdl", ["-l", url, "--path", outDir, "--mp3", "--onlymp3"], { timeout: 120000, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] });
         } else if (tools.ytdlp) {
-          execSync(`${ytdlpBin()} "${url}" -x --audio-format mp3 --audio-quality 0 -o "${outDir}/%(uploader)s/%(title)s.%(ext)s" 2>&1`, { timeout: 120000, encoding: "utf-8" });
+          execFileSync(ytdlpBin(), [url, "-x", "--audio-format", "mp3", "--audio-quality", "0", "-o", `${outDir}/%(uploader)s/%(title)s.%(ext)s`], { timeout: 120000, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] });
         } else {
           ctx.ui.notify("Neither scdl nor yt-dlp found. pip install scdl", "warning"); return;
         }
@@ -589,10 +589,11 @@ export default function piDj(pi: ExtensionAPI) {
       const out = join(musicDir, "Lyria", `mix_${Date.now()}.mp3`);
       ctx.ui.notify(`🎚️ Crossfading ${xfade}s...`, "info");
       try {
-        execSync(
-          `ffmpeg -i "${a}" -i "${b}" -filter_complex "[0][1]acrossfade=d=${xfade}:c1=tri:c2=tri[out]" -map "[out]" "${out}" -y 2>&1`,
-          { timeout: 120000, encoding: "utf-8" }
-        );
+        execFileSync("ffmpeg", [
+          "-i", a, "-i", b, "-filter_complex",
+          `[0][1]acrossfade=d=${xfade}:c1=tri:c2=tri[out]`,
+          "-map", "[out]", out, "-y",
+        ], { timeout: 120000, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] });
         ctx.ui.notify(`✅ Saved: ${basename(out)}`, "success");
       } catch (e: any) {
         ctx.ui.notify(`Mix failed: ${String(e.message || e).slice(0, 200)}`, "error");
@@ -600,27 +601,7 @@ export default function piDj(pi: ExtensionAPI) {
     },
   });
 
-  // ── /trim — runs ffmpeg directly ──────────────────────────────────────
-  pi.registerCommand("trim", {
-    description: "Trim audio clip. /trim <file> <start-sec> [end-sec]",
-    handler: async (args, ctx) => {
-      const parts = (args?.trim() || "").split(/\s+/);
-      const [file, start = "0", end] = parts;
-      if (!file) { ctx.ui.notify("Usage: /trim <file> <start> [end] (seconds)", "warning"); return; }
-      if (!tools.ffmpeg) { ctx.ui.notify(`ffmpeg not found. ${installHint()}`, "warning"); return; }
-      const out = join(musicDir, "Lyria", `trim_${Date.now()}.mp3`);
-      ctx.ui.notify(`✂️ Trimming ${start}s${end ? `–${end}s` : "+"}...`, "info");
-      try {
-        execSync(
-          `ffmpeg -i "${file}" -ss ${start}${end ? ` -to ${end}` : ""} -c copy "${out}" -y 2>&1`,
-          { timeout: 60000, encoding: "utf-8" }
-        );
-        ctx.ui.notify(`✅ Saved: ${basename(out)}`, "success");
-      } catch (e: any) {
-        ctx.ui.notify(`Trim failed: ${String(e.message || e).slice(0, 200)}`, "error");
-      }
-    },
-  });
+  // /trim removed — use pi-ffmpeg's /trim instead (cross-platform, more features)
 
   // ── /bpm — runs librosa/sox directly ─────────────────────────────────
   pi.registerCommand("bpm", {
@@ -1048,8 +1029,8 @@ export default function piDj(pi: ExtensionAPI) {
         `/render <f> [style]   music video via ffmpeg (bars|wave|circle|cqt)\n` +
         `/subs <f> [style]     transcribe + karaoke subtitles (whisper)\n` +
         `/mix <a> <b> [s]      crossfade with ffmpeg\n` +
-        `/trim <f> <s> [e]     trim clip\n` +
-        `/bpm <file>           detect BPM\n\n` +
+        `/bpm <file>           detect BPM\n` +
+        `  (trim → /trim via pi-ffmpeg)\n\n` +
         `Missing tools? ${installHint()}`,
         "info"
       );
