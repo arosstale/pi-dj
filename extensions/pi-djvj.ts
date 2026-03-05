@@ -2136,8 +2136,8 @@ const shaderSnowfall: ShaderFn = (fb, w, h, t, bands, bass, mid, treble, beat) =
   }
 };
 
-// 55. Kaleidoscope — mirrored rotational symmetry with audio colors
-const shaderKaleidoscope: ShaderFn = (fb, w, h, t, bands, bass, mid, treble, beat) => {
+// 55. Kaleidoscope II — mirrored rotational symmetry with audio colors + fbm
+const shaderKaleidoscope2: ShaderFn = (fb, w, h, t, bands, bass, mid, treble, beat) => {
   const segments = 6 + Math.floor(beat * 2);
   const angleStep = (Math.PI * 2) / segments;
   const cx = w / 2, cy = h / 2;
@@ -2436,7 +2436,7 @@ const SHADERS: { name: string; fn: ShaderFn }[] = [
   // ✦ Art Pieces III (53-60)
   { name: "✦ Mandelbrot",  fn: shaderMandelbrot    },
   { name: "✦ Snowfall",    fn: shaderSnowfall      },
-  { name: "✦ Kaleidoscope",fn: shaderKaleidoscope  },
+  { name: "✦ Kaleidoscope II",fn: shaderKaleidoscope2 },
   { name: "✦ Cyber Rain",  fn: shaderCyberRain     },
   { name: "✦ DNA Helix",   fn: shaderDNA           },
   { name: "✦ Lissajous Web",fn: shaderLissajousWeb },
