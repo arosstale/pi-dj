@@ -10,7 +10,7 @@
  *   Termux:   pkg install mpv ffmpeg python; pip install yt-dlp
  *
  * Division of labour:
- *   cliamp v1.14+ → local files, HTTP streams, Lyria AI, Navidrome, webm, pipe-streaming (/play /music)
+ *   cliamp v1.15+ → local files, HTTP streams, Lyria AI, Navidrome, SoundCloud search, webm (/play /music)
  *   pi-djvj       → terminal visualizer + fragcoord shaders (/viz /djvj)
  *   pi-dj (this)  → YouTube streaming, downloads, production tools, global radio (/radio)
  *
@@ -349,7 +349,7 @@ export default function piDj(pi: ExtensionAPI) {
       ffmpeg: which("ffmpeg"),
       scdl:   which("scdl"),
       python: which("python3") || which("python"),
-      cliamp: which("cliamp") || existsSync(join(HOME, "bin", "cliamp.exe")) ? join(HOME, "bin", "cliamp.exe") : null,
+      cliamp: which("cliamp") || (existsSync(join(HOME, "bin", "cliamp.exe")) ? join(HOME, "bin", "cliamp.exe") : null),
     };
     for (const sub of ["Lyria","Suno","SoundCloud","Bandcamp","BandLab","Videos"])
       try { mkdirSync(join(musicDir, sub), { recursive: true }); } catch {}
