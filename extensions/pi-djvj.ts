@@ -330,7 +330,7 @@ function hsl(h: number, s: number, l: number): [number,number,number] {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// HALF-BLOCK SHADERS (16 total)
+// HALF-BLOCK SHADERS (30 total)
 // ─────────────────────────────────────────────────────────────────────────────
 
 type ShaderFn = (fb: Uint8Array, w: number, h: number, t: number,
@@ -835,6 +835,259 @@ const shaderLiquidMetal: ShaderFn = (fb, w, h, t, bands, bass, mid, treble, beat
   }
 };
 
+// 25: DNA Helix — rotating double helix with audio-reactive base pairs
+const shaderDNA: ShaderFn = (fb, w, h, t, bands, bass, mid, treble, beat) => {
+  for (let i = 0; i < fb.length; i++) fb[i] = (fb[i] * 0.75) | 0;
+  const cx = w / 2;
+  for (let y = 0; y < h; y++) {
+    const phase = y / h * Math.PI * 6 + t * 2;
+    const bi = Math.floor((y / h) * bands.length);
+    const level = (bands[Math.min(bi, bands.length - 1)] || 0) * 3;
+    const radius = (cx * 0.35 + level * cx * 0.15) * (1 + beat * 0.15);
+
+    // Two helix strands
+    const x1 = Math.floor(cx + Math.cos(phase) * radius);
+    const x2 = Math.floor(cx - Math.cos(phase) * radius);
+    const depth1 = Math.sin(phase); // -1 to 1, controls brightness
+    const depth2 = -depth1;
+
+    // Strand 1 (cyan)
+    const b1 = Math.max(0.2, 0.5 + depth1 * 0.5);
+    for (let dx = -1; dx <= 1; dx++) setPixel(fb, w, x1 + dx, y, 30 * b1, 200 * b1, 255 * b1);
+
+    // Strand 2 (magenta)
+    const b2a = Math.max(0.2, 0.5 + depth2 * 0.5);
+    for (let dx = -1; dx <= 1; dx++) setPixel(fb, w, x2 + dx, y, 255 * b2a, 50 * b2a, 200 * b2a);
+
+    // Base pair rungs — only draw when both strands are at similar depth (visible)
+    if (y % 3 === 0 && Math.abs(depth1) < 0.6) {
+      const minX = Math.min(x1, x2), maxX = Math.max(x1, x2);
+      const rungBright = (0.3 + level * 0.2) * (1 - Math.abs(depth1));
+      const [cr, cg, cb] = hsl((y / h + t * 0.05) % 1, 0.8, 0.4);
+      for (let x = minX + 2; x < maxX - 1; x += 2)
+        setPixel(fb, w, x, y, cr * rungBright, cg * rungBright, cb * rungBright);
+    }
+  }
+  // Beat flash at center
+  if (beat > 0.4) for (let y = 0; y < h; y++) setPixel(fb, w, cx | 0, y, 60 * beat, 60 * beat, 80 * beat);
+};
+
+// 26: Rain — digital rainfall with audio-reactive density and splash
+const RAIN_DROPS: { x: number; y: number; speed: number; len: number; hue: number }[] = [];
+const shaderRain: ShaderFn = (fb, w, h, _t, bands, bass, _m, treble, beat) => {
+  for (let i = 0; i < fb.length; i++) fb[i] = (fb[i] * 0.82) | 0;
+  // Spawn drops — density scales with bass
+  const spawnRate = 2 + Math.floor(bass * 10 + beat * 8);
+  for (let i = 0; i < spawnRate && RAIN_DROPS.length < 400; i++) {
+    const bi = Math.floor(Math.random() * bands.length);
+    RAIN_DROPS.push({
+      x: Math.floor(Math.random() * w), y: -Math.floor(Math.random() * 5),
+      speed: 1 + Math.random() * 2 + treble * 2, len: 3 + Math.floor(Math.random() * 5),
+      hue: bi / bands.length,
+    });
+  }
+  // Update + render drops
+  for (let i = RAIN_DROPS.length - 1; i >= 0; i--) {
+    const d = RAIN_DROPS[i];
+    d.y += d.speed;
+    if (d.y > h + d.len) { RAIN_DROPS.splice(i, 1); continue; }
+    const [cr, cg, cb] = hsl(d.hue, 0.6, 0.5);
+    for (let dy = 0; dy < d.len; dy++) {
+      const py = Math.floor(d.y) - dy;
+      const fade = 1 - dy / d.len;
+      setPixel(fb, w, d.x, py, cr * fade, cg * fade, cb * fade);
+    }
+    // Splash at bottom
+    if (d.y >= h - 1 && d.y < h + 1) {
+      const splash = 3 + Math.floor(bass * 4);
+      for (let sx = -splash; sx <= splash; sx++) {
+        const sy = h - 1 - Math.abs(sx) * 0.3;
+        setPixel(fb, w, d.x + sx, sy | 0, cr * 0.5, cg * 0.5, cb * 0.5);
+      }
+    }
+  }
+  // Puddle reflections at bottom
+  for (let x = 0; x < w; x++) {
+    const bi = Math.floor((x / w) * bands.length);
+    const level = (bands[Math.min(bi, bands.length - 1)] || 0) * 2;
+    setPixel(fb, w, x, h - 1, 20 + level * 40, 30 + level * 60, 50 + level * 80);
+  }
+};
+
+// 27: Oscilloscope XY — classic analog scope Lissajous with phosphor decay
+const shaderOscXY: ShaderFn = (fb, w, h, t, bands, bass, mid, treble, beat, samples) => {
+  // Slow phosphor decay — green CRT look
+  for (let i = 0; i < fb.length; i += 3) { fb[i] = (fb[i] * 0.6) | 0; fb[i + 1] = (fb[i + 1] * 0.85) | 0; fb[i + 2] = (fb[i + 2] * 0.6) | 0; }
+  const cx = w / 2, cy = h / 2;
+  // Graticule
+  for (let x = 0; x < w; x++) setPixel(fb, w, x, cy | 0, 10, 30, 10);
+  for (let y = 0; y < h; y++) setPixel(fb, w, cx | 0, y, 10, 30, 10);
+  // Beam
+  if (samples && samples.length > 1) {
+    const step = Math.max(1, Math.floor(samples.length / 1200));
+    for (let i = 0; i < samples.length - step; i += step) {
+      const xSig = samples[i] || 0, ySig = samples[Math.min(i + Math.floor(samples.length * 0.25), samples.length - 1)] || 0;
+      const px = Math.floor(cx + xSig * cx * 0.85 * (1 + bass * 0.3));
+      const py = Math.floor(cy + ySig * cy * 0.42 * (1 + treble * 0.3));
+      // Bright center dot + bloom
+      setPixel(fb, w, px, py, 40, 255, 40);
+      setPixel(fb, w, px - 1, py, 20, 150, 20);
+      setPixel(fb, w, px + 1, py, 20, 150, 20);
+      setPixel(fb, w, px, py - 1, 20, 100, 20);
+    }
+  } else {
+    // Demo: Lissajous with band-driven frequencies
+    const fx = 3 + Math.floor(bass * 5), fy = 2 + Math.floor(treble * 4);
+    for (let i = 0; i < 3000; i++) {
+      const theta = (i / 3000) * Math.PI * 2;
+      const px = Math.floor(cx + Math.sin(fx * theta + t * 0.8) * cx * 0.8);
+      const py = Math.floor(cy + Math.sin(fy * theta + mid * 3) * cy * 0.4);
+      setPixel(fb, w, px, py, 30, 255 * (0.5 + beat * 0.5), 30);
+    }
+  }
+};
+
+// 28: Terrain — 3D heightmap flyover driven by audio bands
+const shaderTerrain: ShaderFn = (fb, w, h, t, bands, bass, mid, treble, beat) => {
+  fb.fill(0);
+  // Perspective ground plane — scanline from bottom to horizon
+  const horizon = Math.floor(h * 0.35);
+  for (let screenY = h - 1; screenY > horizon; screenY--) {
+    const depth = (h - screenY) / (h - horizon); // 0 at bottom, 1 at horizon
+    const z = 0.2 / (depth + 0.01) + t * 3; // world-Z, scrolling forward
+    const scale = 1 / (depth + 0.01);
+    for (let screenX = 0; screenX < w; screenX++) {
+      const worldX = (screenX - w / 2) / scale * 0.15;
+      // Height from noise + audio
+      const bi = Math.floor(Math.abs(worldX) * bands.length * 0.2) % bands.length;
+      const bandH = (bands[Math.min(bi, bands.length - 1)] || 0) * 3;
+      const noise = fnoise(worldX * 2 + 0.5, z * 0.5) * 0.6 + bandH * 0.4;
+      const terrainH = noise * (1 + bass * 0.8);
+      // Project height to screen
+      const projY = screenY - Math.floor(terrainH * scale * 2);
+      if (projY < 0 || projY >= screenY) continue;
+      // Color: green valleys, brown peaks, snow tops
+      let r, g, b2;
+      if (terrainH > 0.7) { r = 200 + beat * 55; g = 200 + beat * 55; b2 = 220; } // snow
+      else if (terrainH > 0.4) { r = 120 + mid * 80; g = 80 + mid * 40; b2 = 40; } // brown
+      else { r = 30; g = 100 + terrainH * 300; b2 = 30 + treble * 60; } // green
+      const fog = Math.max(0, 1 - depth * 0.6);
+      for (let py = projY; py <= screenY; py++)
+        setPixel(fb, w, screenX, py, r * fog, g * fog, b2 * fog);
+    }
+  }
+  // Sky gradient
+  for (let y = 0; y <= horizon; y++) {
+    const skyT = y / horizon;
+    for (let x = 0; x < w; x++)
+      setPixel(fb, w, x, y, 10 + skyT * 30, 10 + skyT * 20, 40 + skyT * 60 + beat * 30);
+  }
+};
+
+// 29: Supernova — expanding shockwave explosion triggered by beat
+const NOVA_RINGS: { age: number; maxAge: number; hue: number }[] = [];
+const shaderSupernova: ShaderFn = (fb, w, h, t, bands, bass, mid, treble, beat) => {
+  for (let i = 0; i < fb.length; i++) fb[i] = (fb[i] * 0.88) | 0;
+  const cx = w / 2, cy = h / 2, maxR = Math.min(cx, cy) * 1.2;
+  // Spawn new ring on strong beat
+  if (beat > 0.5 && (NOVA_RINGS.length === 0 || NOVA_RINGS[NOVA_RINGS.length - 1].age > 8)) {
+    NOVA_RINGS.push({ age: 0, maxAge: 60 + Math.floor(bass * 40), hue: (t * 0.1) % 1 });
+  }
+  // Render rings
+  for (let ri = NOVA_RINGS.length - 1; ri >= 0; ri--) {
+    const ring = NOVA_RINGS[ri];
+    ring.age++;
+    if (ring.age > ring.maxAge) { NOVA_RINGS.splice(ri, 1); continue; }
+    const frac = ring.age / ring.maxAge;
+    const radius = frac * maxR;
+    const thickness = 2 + (1 - frac) * 6;
+    const bright = (1 - frac) * (0.8 + beat * 0.4);
+    const steps = Math.max(80, Math.floor(radius * 3));
+    for (let s = 0; s < steps; s++) {
+      const angle = (s / steps) * Math.PI * 2;
+      const bIdx = Math.floor((s / steps) * bands.length);
+      const bVal = (bands[Math.min(bIdx, bands.length - 1)] || 0) * 2;
+      const r2 = radius + bVal * 3 * (1 - frac);
+      const px = Math.floor(cx + Math.cos(angle) * r2 * 2); // 2x for aspect
+      const py = Math.floor(cy + Math.sin(angle) * r2);
+      const [cr, cg, cb] = hsl((ring.hue + frac * 0.3 + s / steps * 0.1) % 1, 1, 0.5);
+      for (let dt = -thickness; dt <= thickness; dt++) {
+        const fade = (1 - Math.abs(dt) / thickness) * bright;
+        setPixel(fb, w, px + dt, py, cr * fade, cg * fade, cb * fade);
+      }
+    }
+    // Core glow (early frames)
+    if (frac < 0.3) {
+      const coreR = (0.3 - frac) * 10;
+      for (let dy = -coreR; dy <= coreR; dy++)
+        for (let dx = -coreR * 2; dx <= coreR * 2; dx++)
+          setPixel(fb, w, cx + dx | 0, cy + dy | 0, 255 * (1 - frac * 3), 200 * (1 - frac * 3), 100);
+    }
+  }
+  // Background stars
+  for (let s = 0; s < 40; s++) {
+    const sx = Math.floor(fhash(s * 17.3) * w), sy = Math.floor(fhash(s * 31.7) * h);
+    const flicker = 0.5 + 0.5 * Math.sin(t * 3 + s);
+    setPixel(fb, w, sx, sy, 120 * flicker, 120 * flicker, 150 * flicker);
+  }
+};
+
+// 30: Glitch — data corruption / scan line distortion aesthetic
+const shaderGlitch: ShaderFn = (fb, w, h, t, bands, bass, mid, treble, beat) => {
+  // Base: color bars / test pattern
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const bi = Math.floor((x / w) * bands.length);
+    const level = (bands[Math.min(bi, bands.length - 1)] || 0) * 4;
+    const barH = Math.floor(level * h);
+    if (h - y < barH) {
+      const [cr, cg, cb] = hsl(bi / bands.length, 0.8, 0.4);
+      setPixel(fb, w, x, y, cr, cg, cb);
+    } else {
+      setPixel(fb, w, x, y, 8, 8, 12);
+    }
+  }
+  // Glitch blocks — on beat, corrupt random rectangular regions
+  const glitchIntensity = beat * 0.6 + bass * 0.4;
+  const nBlocks = Math.floor(glitchIntensity * 12);
+  for (let b = 0; b < nBlocks; b++) {
+    const bx = Math.floor(fhash(t * 100 + b * 7.1) * w);
+    const by = Math.floor(fhash(t * 100 + b * 13.3) * h);
+    const bw2 = 4 + Math.floor(fhash(t * 100 + b * 3.7) * 30);
+    const bh2 = 1 + Math.floor(fhash(t * 100 + b * 19.9) * 6);
+    const shift = Math.floor((fhash(t * 100 + b * 23.1) - 0.5) * 20);
+    // Copy shifted pixels (horizontal shift = classic glitch)
+    for (let dy = 0; dy < bh2 && by + dy < h; dy++)
+      for (let dx = 0; dx < bw2 && bx + dx < w; dx++) {
+        const sx = bx + dx + shift;
+        if (sx < 0 || sx >= w) continue;
+        const si = ((by + dy) * w + sx) * 3, di = ((by + dy) * w + bx + dx) * 3;
+        if (si + 2 < fb.length && di + 2 < fb.length) {
+          fb[di] = fb[si]; fb[di + 1] = fb[si + 1]; fb[di + 2] = fb[si + 2];
+        }
+      }
+  }
+  // Scan lines
+  for (let y = 0; y < h; y += 2) for (let x = 0; x < w; x++) {
+    const i = (y * w + x) * 3;
+    if (i + 2 < fb.length) { fb[i] = (fb[i] * 0.7) | 0; fb[i + 1] = (fb[i + 1] * 0.7) | 0; fb[i + 2] = (fb[i + 2] * 0.7) | 0; }
+  }
+  // RGB channel split on beat
+  if (beat > 0.3) {
+    const shift2 = Math.floor(beat * 4);
+    for (let y = 0; y < h; y++) for (let x = w - 1; x >= shift2; x--) {
+      const i = (y * w + x) * 3, si = (y * w + x - shift2) * 3;
+      if (si >= 0 && i + 2 < fb.length) fb[i] = fb[si]; // shift red channel right
+    }
+  }
+  // Static noise band (VHS tracking error)
+  const trackY = Math.floor((t * 20 + treble * h) % h);
+  for (let dy = 0; dy < 3 && trackY + dy < h; dy++)
+    for (let x = 0; x < w; x++) {
+      const noise = Math.floor(fhash(x * 0.1 + trackY + t * 1000) * 255 * mid);
+      setPixel(fb, w, x, trackY + dy, noise, noise, noise);
+    }
+};
+
 const SHADERS: { name: string; fn: ShaderFn }[] = [
   { name: "Spectrum",     fn: shaderSpectrum     },
   { name: "Radial",       fn: shaderRadial        },
@@ -861,6 +1114,13 @@ const SHADERS: { name: string; fn: ShaderFn }[] = [
   { name: "Fractal",      fn: shaderFractal       },
   { name: "3D Sphere",    fn: shaderSphere        },
   { name: "Liquid Metal", fn: shaderLiquidMetal   },
+  // ── new shaders ──
+  { name: "DNA Helix",   fn: shaderDNA            },
+  { name: "Rain",        fn: shaderRain           },
+  { name: "Oscilloscope",fn: shaderOscXY          },
+  { name: "Terrain",     fn: shaderTerrain        },
+  { name: "Supernova",   fn: shaderSupernova      },
+  { name: "Glitch",      fn: shaderGlitch         },
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1169,7 +1429,7 @@ export default function (pi: ExtensionAPI) {
   pi.registerCommand("viz", {
     description: [
       "Terminal audio-reactive visualizer. Reacts to mpv (pi-dj) or mic.",
-      "24 half-block shaders (incl. raymarched 3D, black hole, nebula, voronoi) + 6 braille modes + ASCII mode.",
+      "30 half-block shaders (incl. raymarched 3D, black hole, nebula, terrain, supernova, glitch) + 6 braille modes + ASCII mode.",
       "Keys: N/P=shader  v=mode  a=ascii  b=braille  1-9 0=jump  +-=sens  F=fullscreen  Q=quit",
       "Usage: /viz        — embedded in pi TUI",
       "       /viz full   — fullscreen alt-screen mode",
