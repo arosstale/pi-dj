@@ -330,7 +330,7 @@ function hsl(h: number, s: number, l: number): [number,number,number] {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// HALF-BLOCK SHADERS (36 total)
+// HALF-BLOCK SHADERS (44 total)
 // ─────────────────────────────────────────────────────────────────────────────
 
 type ShaderFn = (fb: Uint8Array, w: number, h: number, t: number,
@@ -1320,6 +1320,365 @@ const shaderSaturn: ShaderFn = (fb, w, h, t, bands, bass, mid, treble, beat) => 
   }
 };
 
+// ═══════════════════════════════════════════════════════════════════════════
+// ✦ ART PIECES — beauty first, data second
+// ═══════════════════════════════════════════════════════════════════════════
+
+// 37: Jellyfish — bioluminescent creatures pulsing in the deep
+const shaderJellyfish: ShaderFn = (fb, w, h, t, bands, bass, mid, treble, beat) => {
+  // Deep ocean background
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const depth = y / h;
+    setPixel(fb, w, x, y, 2, 3 + depth * 8, 15 + depth * 25);
+  }
+  // 4 jellyfish, each driven by different frequency band
+  const jellies = [
+    { cx: 0.25, cy: 0.4, freq: bass, hue: 0.55, size: 1.2 },
+    { cx: 0.65, cy: 0.35, freq: mid, hue: 0.8, size: 0.9 },
+    { cx: 0.45, cy: 0.55, freq: treble, hue: 0.15, size: 1.0 },
+    { cx: 0.8, cy: 0.5, freq: (bass + mid) / 2, hue: 0.35, size: 0.7 },
+  ];
+  for (const j of jellies) {
+    const jx = w * (j.cx + Math.sin(t * 0.3 + j.hue * 10) * 0.08);
+    const jy = h * (j.cy + Math.cos(t * 0.2 + j.hue * 7) * 0.06);
+    const pulse = 1 + j.freq * 0.5 + beat * 0.3;
+    const bellW = 12 * j.size * pulse, bellH = 8 * j.size * pulse;
+    // Bell (dome)
+    for (let dy = -bellH; dy <= 0; dy++) for (let dx = -bellW; dx <= bellW; dx++) {
+      const nx = dx / bellW, ny = dy / bellH;
+      const d = nx * nx + ny * ny;
+      if (d > 1) continue;
+      const bright = (1 - d) * (0.4 + j.freq * 0.8 + beat * 0.3);
+      const edge = d > 0.7 ? (d - 0.7) / 0.3 * 0.6 : 0;
+      const [cr, cg, cb] = hsl(j.hue, 0.7, 0.3 + bright * 0.4);
+      const px = jx + dx | 0, py = jy + dy | 0;
+      setPixel(fb, w, px, py, cr * bright + edge * 80, cg * bright + edge * 40, cb * bright + edge * 120);
+    }
+    // Tentacles — sinusoidal curves trailing down
+    for (let tent = 0; tent < 5; tent++) {
+      const ox = (tent - 2) * bellW * 0.35;
+      for (let ty = 0; ty < h * 0.35; ty++) {
+        const sway = Math.sin(ty * 0.15 + t * 2 + tent * 1.7 + j.freq * 4) * (3 + ty * 0.1);
+        const fade = Math.max(0, 1 - ty / (h * 0.35));
+        const bi2 = Math.floor((ty / (h * 0.35)) * bands.length);
+        const bVal = (bands[Math.min(bi2, bands.length - 1)] || 0) * 2;
+        const [cr, cg, cb] = hsl((j.hue + ty * 0.002) % 1, 0.6, 0.2 + bVal * 0.3);
+        const px = jx + ox + sway | 0, py = jy + ty | 0;
+        setPixel(fb, w, px, py, cr * fade, cg * fade, cb * fade);
+      }
+    }
+  }
+  // Floating bioluminescent particles
+  for (let p = 0; p < 40; p++) {
+    const px = (fhash(p * 13.7) * w + Math.sin(t * 0.5 + p) * 10) % w | 0;
+    const py = (fhash(p * 29.3) * h + Math.cos(t * 0.3 + p * 1.7) * 8) % h | 0;
+    const flicker = 0.3 + 0.7 * (0.5 + 0.5 * Math.sin(t * 3 + p * 2.3));
+    setPixel(fb, w, px, py, 40 * flicker, 80 * flicker, 120 * flicker);
+  }
+};
+
+// 38: Stained Glass — Voronoi cells with jewel-toned fills and lead borders
+const shaderStainedGlass: ShaderFn = (fb, w, h, t, bands, bass, mid, treble, beat) => {
+  const nPoints = 12;
+  // Cell centers — slowly drifting, audio-perturbed
+  const pts: { x: number; y: number }[] = [];
+  for (let i = 0; i < nPoints; i++) {
+    const bi = Math.floor((i / nPoints) * bands.length);
+    const level = (bands[Math.min(bi, bands.length - 1)] || 0) * 2;
+    pts.push({
+      x: (fhash2(i, 0) + Math.sin(t * 0.15 + i * 2.3) * 0.15 + level * 0.05) * w,
+      y: (fhash2(0, i) + Math.cos(t * 0.12 + i * 1.9) * 0.15 + level * 0.05) * h,
+    });
+  }
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    let minD = 1e9, minD2 = 1e9, minI = 0;
+    for (let i = 0; i < nPoints; i++) {
+      const dx = (x - pts[i].x) * 0.5, dy = y - pts[i].y; // aspect correction
+      const d = dx * dx + dy * dy;
+      if (d < minD) { minD2 = minD; minD = d; minI = i; } else if (d < minD2) { minD2 = d; }
+    }
+    const edge = Math.sqrt(minD2) - Math.sqrt(minD);
+    const isLead = edge < 1.5;
+    if (isLead) {
+      // Lead lines — dark grey with highlight on beat
+      setPixel(fb, w, x, y, 25 + beat * 40, 25 + beat * 30, 30 + beat * 50);
+    } else {
+      // Jewel tones — each cell gets a rich saturated color
+      const hue = (fhash(minI * 7.3 + 0.1) + t * 0.01) % 1;
+      const sat = 0.85;
+      // Brightness: center of cell is bright, edges darker (cathedral light)
+      const cellFrac = Math.sqrt(minD) / (Math.sqrt(minD) + Math.sqrt(minD2));
+      const light = 0.25 + (1 - cellFrac) * 0.35;
+      // Audio: cell brightens based on its frequency band
+      const bi = Math.floor((minI / nPoints) * bands.length);
+      const level = (bands[Math.min(bi, bands.length - 1)] || 0) * 3;
+      const glow = light + level * 0.3 + beat * 0.15;
+      const [cr, cg, cb] = hsl(hue, sat, glow);
+      setPixel(fb, w, x, y, cr, cg, cb);
+    }
+  }
+};
+
+// 39: Northern Lights — flowing curtains over a dark horizon (cava-inspired but cinematic)
+const shaderNorthernLights: ShaderFn = (fb, w, h, t, bands, bass, mid, treble, beat) => {
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const ux = x / w, uy = y / h;
+    // Sky: dark gradient, darker at top
+    let r = 0.01, g = 0.01, b2 = 0.03 + (1 - uy) * 0.04;
+    // 6 aurora curtains with different heights and colors
+    for (let i = 0; i < 6; i++) {
+      const fi = i;
+      // Curtain center Y — undulates with fbm
+      const centerY = 0.3 + fi * 0.04 + fnoise(ux * (1.5 + fi * 0.3) + t * (0.1 + fi * 0.02), fi * 5 + t * 0.05) * (0.15 + bass * 0.08);
+      const dist = Math.abs(uy - centerY);
+      // Gaussian-ish curtain shape
+      const curtain = Math.exp(-dist * dist * (80 + fi * 20));
+      if (curtain < 0.01) continue;
+      // Brightness varies along X with audio
+      const bi = Math.floor(ux * bands.length);
+      const spec = (bands[Math.min(bi, bands.length - 1)] || 0) * 3;
+      const shimmer = 0.5 + 0.5 * Math.sin(ux * 30 + t * 2 + fi * 7);
+      const intensity = curtain * (0.3 + spec * 0.6 + shimmer * 0.2) * (0.8 + beat * 0.3);
+      // Color: green → teal → purple → pink across curtains
+      const hues = [0.35, 0.4, 0.5, 0.6, 0.75, 0.85];
+      const [cr, cg, cb] = hsl(hues[i], 0.8, 0.5);
+      r += cr / 255 * intensity;
+      g += cg / 255 * intensity;
+      b2 += cb / 255 * intensity;
+    }
+    // Stars (only in dark areas)
+    if (r + g + b2 < 0.15 && uy < 0.6) {
+      const sx = Math.floor(x * 0.7), sy = Math.floor(y * 0.7);
+      if (fhash2(sx, sy) > 0.994) {
+        const twinkle = 0.4 + 0.6 * (0.5 + 0.5 * Math.sin(t * 4 + sx * 3.7));
+        r += twinkle * 0.7; g += twinkle * 0.7; b2 += twinkle * 0.8;
+      }
+    }
+    // Treeline silhouette at bottom
+    if (uy > 0.85) {
+      const treeH = 0.85 + fnoise(x * 0.05, 0) * 0.1;
+      if (uy > treeH) { r = 0.01; g = 0.01; b2 = 0.02; }
+    }
+    setPixel(fb, w, x, y, Math.min(255, r * 255), Math.min(255, g * 255), Math.min(255, b2 * 255));
+  }
+};
+
+// 40: Ocean Deep — underwater caustics + swimming light rays
+const shaderOceanDeep: ShaderFn = (fb, w, h, t, bands, bass, mid, treble, beat) => {
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const ux = x / w * 5, uy = y / h * 5;
+    const t2 = t * 0.4;
+    // Fake caustics: layered sine interference (the chroma trick)
+    const c1 = Math.sin(ux * 3 + t2 + Math.sin(uy * 2 + t2 * 0.7) * 2);
+    const c2 = Math.sin(uy * 2.5 - t2 * 0.8 + Math.sin(ux * 1.5 + t2 * 1.1) * 1.5);
+    const c3 = Math.sin((ux + uy) * 1.8 + t2 * 0.6 + bass * 4);
+    const caustic = (c1 + c2 + c3) / 3 * 0.5 + 0.5;
+    const bright = Math.pow(caustic, 3) * (0.5 + mid * 0.8 + beat * 0.3); // sharpen highlights
+    // Audio band modulation
+    const bi = Math.floor((x / w) * bands.length);
+    const bv = (bands[Math.min(bi, bands.length - 1)] || 0) * 2;
+    // Depth gradient — lighter at top
+    const depthFade = 0.3 + (1 - y / h) * 0.7;
+    // Color: deep blue-green ocean
+    const r = (bright * 0.3 + bv * 0.1) * depthFade;
+    const g = (0.1 + bright * 0.6 + bv * 0.2) * depthFade;
+    const b3 = (0.3 + bright * 0.4 + bv * 0.15) * depthFade;
+    // Light rays from top (volumetric god rays)
+    const rayAngle = (x / w - 0.5) * 2;
+    const rayStrength = Math.exp(-Math.abs(rayAngle) * 3) * (1 - y / h) * (0.15 + treble * 0.3);
+    const [tr, tg, tb] = acesTonemap(r + rayStrength * 0.5, g + rayStrength * 0.8, b3 + rayStrength * 0.6);
+    setPixel(fb, w, x, y, tr, tg, tb);
+  }
+  // Bubbles
+  for (let b = 0; b < 15; b++) {
+    const bx = (fhash(b * 17.3) * w + Math.sin(t * 0.8 + b * 2.1) * 8) % w | 0;
+    const by = (h - ((t * 15 + b * h * 0.3) % (h * 1.2))) | 0;
+    if (by > 0 && by < h) {
+      setPixel(fb, w, bx, by, 100, 180, 220);
+      setPixel(fb, w, bx + 1, by, 80, 140, 180);
+    }
+  }
+};
+
+// 41: Ink — fluid ink drops spreading in water
+const INK_DROPS: { x: number; y: number; age: number; hue: number }[] = [];
+const shaderInk: ShaderFn = (fb, w, h, t, bands, bass, mid, treble, beat) => {
+  // Warm parchment background
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const grain = fnoise(x * 0.3, y * 0.5) * 0.05;
+    setPixel(fb, w, x, y, 230 + grain * 255, 215 + grain * 255, 195 + grain * 255);
+  }
+  // Spawn ink drops on beat
+  if (beat > 0.3 && INK_DROPS.length < 12) {
+    INK_DROPS.push({ x: Math.random() * w, y: Math.random() * h, age: 0, hue: Math.random() });
+  }
+  // Update + render drops
+  for (let di = INK_DROPS.length - 1; di >= 0; di--) {
+    const d = INK_DROPS[di];
+    d.age++;
+    if (d.age > 200) { INK_DROPS.splice(di, 1); continue; }
+    const maxR = 6 + d.age * 0.4 + bass * 8;
+    // Ink spreads with fbm distortion
+    for (let y = Math.max(0, d.y - maxR | 0); y < Math.min(h, d.y + maxR | 0); y++) {
+      for (let x = Math.max(0, d.x - maxR * 2 | 0); x < Math.min(w, d.x + maxR * 2 | 0); x++) {
+        const dx = (x - d.x) * 0.5, dy = y - d.y;
+        const baseDist = Math.sqrt(dx * dx + dy * dy);
+        // Distort distance with fbm for organic edges
+        const distort = ffbm2(x * 0.1 + d.hue * 10, y * 0.15 + t * 0.1) * maxR * 0.4;
+        const dist = baseDist + distort;
+        if (dist < maxR) {
+          const fade = dist / maxR;
+          const inkAlpha = (1 - fade * fade) * Math.min(1, d.age / 10);
+          // Ink color: choose rich dark colors
+          const inkHues = [0.6, 0.0, 0.08, 0.55, 0.75]; // blue, red, vermillion, teal, purple
+          const ih = inkHues[Math.floor(d.hue * inkHues.length) % inkHues.length];
+          const [cr, cg, cb] = hsl(ih, 0.8, 0.15 + (1 - inkAlpha) * 0.1);
+          // Blend onto parchment
+          const i = ((y | 0) * w + (x | 0)) * 3;
+          if (i + 2 < fb.length && inkAlpha > 0.05) {
+            fb[i] = fb[i] * (1 - inkAlpha) + cr * inkAlpha;
+            fb[i + 1] = fb[i + 1] * (1 - inkAlpha) + cg * inkAlpha;
+            fb[i + 2] = fb[i + 2] * (1 - inkAlpha) + cb * inkAlpha;
+          }
+        }
+      }
+    }
+  }
+};
+
+// 42: Galaxy — spiral arms with stars, dust, and a bright core
+const shaderGalaxy: ShaderFn = (fb, w, h, t, bands, bass, mid, treble, beat) => {
+  const cx = w / 2, cy = h / 2;
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const dx = (x - cx) / cx, dy = (y - cy) / cy * 2; // aspect
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    const angle = Math.atan2(dy, dx);
+    // Spiral arms — logarithmic spiral
+    const arms = 2;
+    const twist = 3 + bass * 2;
+    const spiralAngle = angle - Math.log(dist + 0.01) * twist + t * 0.15;
+    const armDist = Math.abs(Math.sin(spiralAngle * arms));
+    const armStrength = Math.exp(-armDist * (4 + treble * 3)) * Math.exp(-dist * 1.5);
+    // Dust — fbm noise in the arms
+    const dust = ffbm2(dx * 3 + t * 0.1, dy * 3 + t * 0.05) * armStrength;
+    // Core glow — exponential falloff
+    const core = Math.exp(-dist * dist * 8) * (1 + bass * 0.5 + beat * 0.4);
+    // Band modulation along spiral
+    const bi = Math.floor(((spiralAngle / Math.PI + 1) * 0.5) * bands.length) % bands.length;
+    const bv = (bands[Math.max(0, bi)] || 0) * 2;
+    // Color: warm core → blue-white arms → deep space
+    let r = core * 1.5 + armStrength * (0.3 + bv * 0.4) + dust * 0.2;
+    let g = core * 1.0 + armStrength * (0.4 + bv * 0.3) + dust * 0.15;
+    let b2 = core * 0.5 + armStrength * (0.7 + bv * 0.5) + dust * 0.3;
+    // Stars
+    const sx = Math.floor(x * 0.5 + t * 0.3), sy = Math.floor(y * 0.5);
+    if (fhash2(sx, sy) > 0.992 && dist > 0.1) {
+      const sBright = (0.3 + treble * 0.5) * (1 - dist * 0.3);
+      r += sBright * 0.9; g += sBright * 0.9; b2 += sBright;
+    }
+    r *= 0.8 + beat * 0.2;
+    const [tr, tg, tb] = acesTonemap(r, g, b2);
+    setPixel(fb, w, x, y, tr, tg, tb);
+  }
+};
+
+// 43: Fireflies — warm summer night with glowing particles in tall grass
+const FLIES: { x: number; y: number; phase: number; speed: number }[] = [];
+const shaderFireflies: ShaderFn = (fb, w, h, t, bands, bass, mid, treble, beat) => {
+  // Night sky gradient
+  for (let y = 0; y < h; y++) {
+    const skyT = Math.max(0, 1 - y / (h * 0.7));
+    for (let x = 0; x < w; x++) {
+      setPixel(fb, w, x, y, 5 + skyT * 10, 5 + skyT * 15, 15 + skyT * 30);
+    }
+  }
+  // Tall grass silhouette (bottom 30%)
+  const grassTop = h * 0.65;
+  for (let x = 0; x < w; x++) {
+    const bladeH = fnoise(x * 0.15, 0) * h * 0.2 + Math.sin(x * 0.3 + t * 0.5 + bass) * h * 0.03;
+    const grassY = grassTop + bladeH;
+    for (let y = grassY | 0; y < h; y++) {
+      const depth = (y - grassY) / (h - grassY);
+      setPixel(fb, w, x, y, 8 + depth * 5, 15 + depth * 8, 5 + depth * 3);
+    }
+  }
+  // Moon
+  const moonX = w * 0.75, moonY = h * 0.15, moonR = 4;
+  for (let dy = -moonR; dy <= moonR; dy++) for (let dx = -moonR * 2; dx <= moonR * 2; dx++) {
+    if ((dx / 2) ** 2 + dy ** 2 < moonR * moonR)
+      setPixel(fb, w, moonX + dx | 0, moonY + dy | 0, 220, 215, 180);
+  }
+  // Manage fireflies
+  while (FLIES.length < 40 + Math.floor(bass * 20)) {
+    FLIES.push({ x: Math.random() * w, y: grassTop + Math.random() * (h * 0.3 - 10), phase: Math.random() * Math.PI * 2, speed: 0.5 + Math.random() });
+  }
+  while (FLIES.length > 60) FLIES.shift();
+  for (const f of FLIES) {
+    f.x += Math.sin(t * f.speed + f.phase) * 0.8;
+    f.y += Math.cos(t * f.speed * 0.7 + f.phase * 1.3) * 0.4;
+    // Glow: pulsing with a warm amber-green light
+    const glow = 0.3 + 0.7 * Math.max(0, Math.sin(t * 2 * f.speed + f.phase));
+    if (glow < 0.15) continue; // off phase
+    const bright = glow * (0.6 + mid * 0.5 + beat * 0.3);
+    // Soft glow radius
+    for (let dy = -2; dy <= 2; dy++) for (let dx = -3; dx <= 3; dx++) {
+      const d = Math.sqrt((dx / 2) ** 2 + dy ** 2);
+      if (d > 2.5) continue;
+      const fade = (1 - d / 2.5) * bright;
+      const px = f.x + dx | 0, py = f.y + dy | 0;
+      if (px >= 0 && px < w && py >= 0 && py < h) {
+        const i = (py * w + px) * 3;
+        fb[i] = Math.min(255, fb[i] + 180 * fade);
+        fb[i + 1] = Math.min(255, fb[i + 1] + 220 * fade);
+        fb[i + 2] = Math.min(255, fb[i + 2] + 30 * fade);
+      }
+    }
+  }
+};
+
+// 44: Coral — reaction-diffusion inspired living reef
+const shaderCoral: ShaderFn = (fb, w, h, t, bands, bass, mid, treble, beat) => {
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const ux = x / w * 6, uy = y / h * 6;
+    const t2 = t * 0.15;
+    // Layered noise with different octaves — simulates RD patterns
+    const n1 = fnoise(ux * 2 + t2, uy * 2 + t2 * 0.5);
+    const n2 = fnoise(ux * 4 + n1 * 2 + bass * 3, uy * 4 - n1 + mid * 2);
+    const n3 = fnoise(ux * 8 + n2 + treble, uy * 8 + n2 * 1.5 + t2 * 0.3);
+    // Threshold to create the coral-like branching patterns
+    const pattern = Math.sin(n1 * 8 + n2 * 4) * Math.cos(n2 * 6 + n3 * 3);
+    const v = pattern * 0.5 + 0.5;
+    // Audio band color selection
+    const bi = Math.floor((ux / 6) * bands.length);
+    const bv = (bands[Math.min(bi, bands.length - 1)] || 0) * 3;
+    // Coral palette: deep reds, oranges, pinks, purples
+    let r, g, b2;
+    if (v > 0.65) { // coral structure
+      const t3 = (v - 0.65) / 0.35;
+      r = 0.8 + t3 * 0.2 + bv * 0.15;
+      g = 0.2 + t3 * 0.3 * mid;
+      b2 = 0.3 + t3 * 0.2 + bv * 0.1;
+    } else if (v > 0.4) { // transition zone
+      const t3 = (v - 0.4) / 0.25;
+      r = 0.5 * t3 + bv * 0.1;
+      g = 0.15 + t3 * 0.1;
+      b2 = 0.4 * t3 + 0.1;
+    } else { // deep water between coral
+      r = 0.02 + v * 0.1;
+      g = 0.05 + v * 0.15;
+      b2 = 0.15 + v * 0.2;
+    }
+    // Bioluminescent sparkle
+    if (fhash2(Math.floor(x * 0.3), Math.floor(y * 0.3)) > 0.995 && v > 0.5) {
+      const spark = 0.5 + treble * 0.5;
+      r += spark * 0.3; g += spark * 0.5; b2 += spark * 0.3;
+    }
+    r *= 0.7 + beat * 0.3; g *= 0.7 + beat * 0.2; b2 *= 0.7 + beat * 0.15;
+    const [tr, tg, tb] = acesTonemap(r, g, b2);
+    setPixel(fb, w, x, y, tr, tg, tb);
+  }
+};
+
 const SHADERS: { name: string; fn: ShaderFn }[] = [
   { name: "Spectrum",     fn: shaderSpectrum     },
   { name: "Radial",       fn: shaderRadial        },
@@ -1360,6 +1719,15 @@ const SHADERS: { name: string; fn: ShaderFn }[] = [
   { name: "Lightning",   fn: shaderLightning      },
   { name: "Spectrogram", fn: shaderSpectrogram    },
   { name: "Saturn Ring", fn: shaderSaturn         },
+  // ── ✦ art pieces ──
+  { name: "✦ Jellyfish",   fn: shaderJellyfish    },
+  { name: "✦ Stained Glass",fn: shaderStainedGlass },
+  { name: "✦ Northern Lights",fn: shaderNorthernLights },
+  { name: "✦ Ocean Deep",  fn: shaderOceanDeep     },
+  { name: "✦ Ink",         fn: shaderInk           },
+  { name: "✦ Galaxy",      fn: shaderGalaxy        },
+  { name: "✦ Fireflies",   fn: shaderFireflies     },
+  { name: "✦ Coral",       fn: shaderCoral         },
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1668,7 +2036,7 @@ export default function (pi: ExtensionAPI) {
   pi.registerCommand("viz", {
     description: [
       "Terminal audio-reactive visualizer. Reacts to mpv (pi-dj) or mic.",
-      "36 half-block shaders (incl. metaballs, lightning, spectrogram, saturn ring, flow field, ripples) + 6 braille modes + ASCII mode.",
+      "44 half-block shaders (incl. ✦ art: jellyfish, stained glass, galaxy, fireflies, ocean, ink, coral, northern lights) + 6 braille + ASCII.",
       "Keys: N/P=shader  v=mode  a=ascii  b=braille  1-9 0=jump  +-=sens  F=fullscreen  Q=quit",
       "Usage: /viz        — embedded in pi TUI",
       "       /viz full   — fullscreen alt-screen mode",
