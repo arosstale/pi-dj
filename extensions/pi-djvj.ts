@@ -2062,6 +2062,319 @@ const shaderWormhole: ShaderFn = (fb, w, h, t, bands, bass, mid, treble, beat) =
   }
 };
 
+// ═══════════════════════════════════════════════════════════════════════════
+// ✦ ART PIECES III — Shaders 53-60
+// ═══════════════════════════════════════════════════════════════════════════
+
+// 53. Mandelbrot zoom — fractal zoom with audio-reactive palette
+const shaderMandelbrot: ShaderFn = (fb, w, h, t, bands, bass, mid, treble, beat) => {
+  const zoom = 0.5 + t * 0.3 + bass * 2;
+  const cx = -0.745 + Math.sin(t * 0.1) * 0.01;
+  const cy = 0.186 + Math.cos(t * 0.13) * 0.01;
+  const maxIter = 40 + Math.floor(mid * 30);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    let zr = (x / w - 0.5) / zoom + cx;
+    let zi = (y / h - 0.5) / zoom + cy;
+    let cr = zr, ci = zi, iter = 0;
+    while (zr * zr + zi * zi < 4 && iter < maxIter) {
+      const tmp = zr * zr - zi * zi + cr;
+      zi = 2 * zr * zi + ci; zr = tmp; iter++;
+    }
+    if (iter >= maxIter) { setPixel(fb, w, x, y, 0, 0, 0); continue; }
+    const f = iter / maxIter + treble * 0.2;
+    const hue = f * 360 + t * 30 + bass * 60;
+    const sat = 0.7 + beat * 0.3;
+    const val = 0.5 + f * 0.5;
+    const [r, g, b2] = hsl(hue / 360, sat, val);
+    setPixel(fb, w, x, y, r, g, b2);
+  }
+};
+
+// 54. Snowfall — drifting snowflakes with wind and accumulation
+const SNOW_FLAKES: { x: number; y: number; vx: number; vy: number; size: number }[] = [];
+const shaderSnowfall: ShaderFn = (fb, w, h, t, bands, bass, mid, treble, beat) => {
+  // Init flakes
+  while (SNOW_FLAKES.length < 120) {
+    SNOW_FLAKES.push({ x: Math.random() * w, y: Math.random() * -h, vx: 0, vy: 0.5 + Math.random() * 1.5, size: 0.5 + Math.random() * 1.5 });
+  }
+  // Dark blue sky gradient
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const gy = y / h;
+    setPixel(fb, w, x, y, gy * 0.02, gy * 0.03 + 0.02, 0.08 + gy * 0.06);
+  }
+  // Ground with snow accumulation
+  const groundY = Math.floor(h * 0.85);
+  for (let y = groundY; y < h; y++) for (let x = 0; x < w; x++) {
+    const snowDepth = (1 + Math.sin(x * 0.3 + t * 0.2)) * 0.15 + 0.7;
+    setPixel(fb, w, x, y, snowDepth, snowDepth, snowDepth + 0.05);
+  }
+  // Wind from bass
+  const wind = Math.sin(t * 0.5) * 2 + bass * 3;
+  // Update + draw flakes
+  for (const f of SNOW_FLAKES) {
+    f.x += wind * 0.3 + Math.sin(t + f.y * 0.1) * 0.5 + f.vx;
+    f.y += f.vy * (0.8 + treble * 0.4);
+    if (f.y > groundY) { f.y = -2; f.x = Math.random() * w; }
+    if (f.x < 0) f.x += w; if (f.x >= w) f.x -= w;
+    const bri = 0.7 + f.size * 0.2 + beat * 0.2;
+    const ix = Math.floor(f.x), iy = Math.floor(f.y);
+    if (iy >= 0 && iy < h && ix >= 0 && ix < w) {
+      setPixel(fb, w, ix, iy, bri, bri, bri + 0.05);
+      if (f.size > 1 && ix + 1 < w) setPixel(fb, w, ix + 1, iy, bri * 0.6, bri * 0.6, bri * 0.65);
+    }
+  }
+  // Moon
+  const mx = Math.floor(w * 0.8), my = Math.floor(h * 0.15);
+  for (let dy = -3; dy <= 3; dy++) for (let dx = -3; dx <= 3; dx++) {
+    if (dx * dx + dy * dy <= 9) {
+      const px = mx + dx, py = my + dy;
+      if (px >= 0 && px < w && py >= 0 && py < h) {
+        const glow = 1 - Math.sqrt(dx * dx + dy * dy) / 3;
+        setPixel(fb, w, px, py, 0.9 + glow * 0.1, 0.9 + glow * 0.1, 0.8 + glow * 0.2);
+      }
+    }
+  }
+};
+
+// 55. Kaleidoscope — mirrored rotational symmetry with audio colors
+const shaderKaleidoscope: ShaderFn = (fb, w, h, t, bands, bass, mid, treble, beat) => {
+  const segments = 6 + Math.floor(beat * 2);
+  const angleStep = (Math.PI * 2) / segments;
+  const cx = w / 2, cy = h / 2;
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const dx = (x - cx) / cx, dy = (y - cy) / cy * (w / h);
+    let angle = Math.atan2(dy, dx) + t * 0.3;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    // Fold into one segment
+    angle = ((angle % angleStep) + angleStep) % angleStep;
+    if (angle > angleStep / 2) angle = angleStep - angle;
+    // Pattern in folded space
+    const px = dist * Math.cos(angle), py = dist * Math.sin(angle);
+    const n1 = ffbm(px * 3 + t * 0.2, py * 3, 3);
+    const n2 = ffbm(px * 2 - t * 0.3, py * 2 + t * 0.1, 2);
+    const hue = n1 * 0.5 + t * 0.05 + bass * 0.2;
+    const sat = 0.6 + n2 * 0.3 + mid * 0.2;
+    const val = 0.3 + n1 * 0.4 + treble * 0.3 + beat * 0.2;
+    const bandIdx = Math.floor(dist * bands.length) % bands.length;
+    const bandAmp = bands[Math.abs(bandIdx)] || 0;
+    const [r, g, b2] = hsl(hue, sat, val + bandAmp * 0.3);
+    const [tr, tg, tb] = acesTonemap(r, g, b2);
+    setPixel(fb, w, x, y, tr, tg, tb);
+  }
+};
+
+// 56. Cyberpunk Rain — vertical rain with neon reflections (Blade Runner vibes)
+const CYBER_DROPS: { x: number; y: number; speed: number; len: number; hue: number }[] = [];
+const shaderCyberRain: ShaderFn = (fb, w, h, t, bands, bass, mid, treble, beat) => {
+  // Init drops
+  while (CYBER_DROPS.length < 80) {
+    CYBER_DROPS.push({ x: Math.floor(Math.random() * w), y: Math.random() * -h, speed: 1 + Math.random() * 2, len: 3 + Math.floor(Math.random() * 8), hue: Math.random() });
+  }
+  // Dark backdrop with slight purple
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    setPixel(fb, w, x, y, 0.01, 0.005, 0.02);
+  }
+  // Horizontal neon lines (buildings far away)
+  for (let i = 0; i < 5; i++) {
+    const ny = Math.floor(h * 0.3 + i * h * 0.12);
+    const hue2 = (i * 0.2 + t * 0.02) % 1;
+    const [lr, lg, lb] = hsl(hue2, 0.8, 0.15 + bass * 0.1);
+    for (let x = 0; x < w; x++) {
+      if (ny >= 0 && ny < h) setPixel(fb, w, x, ny, lr, lg, lb);
+    }
+  }
+  // Update + draw drops
+  for (const d of CYBER_DROPS) {
+    d.y += d.speed * (1 + treble * 0.5);
+    if (d.y > h + d.len) { d.y = -d.len; d.x = Math.floor(Math.random() * w); d.hue = Math.random(); }
+    const [cr, cg, cb] = hsl(d.hue, 0.9, 0.7);
+    for (let i = 0; i < d.len; i++) {
+      const py = Math.floor(d.y - i);
+      if (py >= 0 && py < h && d.x >= 0 && d.x < w) {
+        const fade = 1 - i / d.len;
+        setPixel(fb, w, d.x, py, cr * fade, cg * fade, cb * fade);
+      }
+    }
+  }
+  // Beat flash
+  if (beat > 0.5) {
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      const idx = (y * w + x) * 4;
+      fb[idx] = Math.min(1, fb[idx] + 0.05);
+      fb[idx + 1] = Math.min(1, fb[idx + 1] + 0.02);
+      fb[idx + 2] = Math.min(1, fb[idx + 2] + 0.08);
+    }
+  }
+};
+
+// 57. DNA Helix — double helix rotating in 3D
+const shaderDNA: ShaderFn = (fb, w, h, t, bands, bass, mid, treble, beat) => {
+  // Dark background
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    setPixel(fb, w, x, y, 0.01, 0.01, 0.03);
+  }
+  const cx = w / 2;
+  const helixR = w * 0.25 + bass * w * 0.08;
+  const twist = t * 1.5 + mid * 0.5;
+  // Draw two helical strands
+  for (let y = 0; y < h; y++) {
+    const phase = y / h * Math.PI * 6 + twist;
+    const x1 = cx + Math.cos(phase) * helixR;
+    const x2 = cx + Math.cos(phase + Math.PI) * helixR;
+    const z1 = Math.sin(phase), z2 = Math.sin(phase + Math.PI);
+    const bri1 = 0.4 + z1 * 0.3 + treble * 0.2;
+    const bri2 = 0.4 + z2 * 0.3 + treble * 0.2;
+    // Strand 1 (blue)
+    const ix1 = Math.round(x1);
+    if (ix1 >= 0 && ix1 < w) setPixel(fb, w, ix1, y, bri1 * 0.2, bri1 * 0.5, bri1);
+    if (ix1 + 1 >= 0 && ix1 + 1 < w) setPixel(fb, w, ix1 + 1, y, bri1 * 0.1, bri1 * 0.3, bri1 * 0.7);
+    // Strand 2 (red)
+    const ix2 = Math.round(x2);
+    if (ix2 >= 0 && ix2 < w) setPixel(fb, w, ix2, y, bri2, bri2 * 0.3, bri2 * 0.2);
+    if (ix2 + 1 >= 0 && ix2 + 1 < w) setPixel(fb, w, ix2 + 1, y, bri2 * 0.7, bri2 * 0.15, bri2 * 0.1);
+    // Rungs (every few rows, connecting the two strands)
+    if (y % 4 === 0) {
+      const lx = Math.min(ix1, ix2), rx = Math.max(ix1, ix2);
+      const bandIdx = Math.floor((y / h) * bands.length);
+      const amp = bands[bandIdx] || 0;
+      for (let x = lx + 1; x < rx; x++) {
+        if (x >= 0 && x < w) {
+          const frac = (x - lx) / (rx - lx);
+          const [rr, rg, rb] = hsl(frac * 0.3 + t * 0.05, 0.6, 0.2 + amp * 0.4 + beat * 0.15);
+          setPixel(fb, w, x, y, rr, rg, rb);
+        }
+      }
+    }
+  }
+};
+
+// 58. Lissajous Web — 3D lissajous curves forming a web
+const shaderLissajousWeb: ShaderFn = (fb, w, h, t, bands, bass, mid, treble, beat) => {
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) setPixel(fb, w, x, y, 0, 0, 0);
+  const cx = w / 2, cy = h / 2;
+  const curves = 5 + Math.floor(bass * 3);
+  for (let c = 0; c < curves; c++) {
+    const a = 2 + c, b = 3 + c;
+    const delta = t * 0.5 + c * 0.7;
+    const hue = (c / curves + t * 0.03) % 1;
+    const [cr, cg, cb] = hsl(hue, 0.8, 0.5 + treble * 0.3);
+    const steps = 300 + Math.floor(mid * 200);
+    for (let i = 0; i < steps; i++) {
+      const p = (i / steps) * Math.PI * 2;
+      const lx = Math.cos(a * p + delta) * cx * 0.8 * (0.7 + bands[c % bands.length] * 0.5);
+      const ly = Math.sin(b * p + delta * 0.7) * cy * 0.8;
+      const ix = Math.floor(cx + lx), iy = Math.floor(cy + ly);
+      if (ix >= 0 && ix < w && iy >= 0 && iy < h) {
+        const idx = (iy * w + ix) * 4;
+        fb[idx] = Math.min(1, fb[idx] + cr * 0.15);
+        fb[idx+1] = Math.min(1, fb[idx+1] + cg * 0.15);
+        fb[idx+2] = Math.min(1, fb[idx+2] + cb * 0.15);
+      }
+    }
+  }
+  // Bloom pass — beat brightens
+  if (beat > 0.3) {
+    for (let i = 0; i < fb.length; i++) fb[i] = Math.min(1, fb[i] * (1 + beat * 0.3));
+  }
+};
+
+// 59. Terrain — scrolling 3D terrain (fake raycasting, top-down perspective)
+const shaderTerrain: ShaderFn = (fb, w, h, t, bands, bass, mid, treble, beat) => {
+  for (let y = 0; y < h; y++) {
+    const depth = (y + 1) / h; // 0 at top (far), 1 at bottom (near)
+    const scale = 1 / (depth + 0.01);
+    const scrollZ = t * 2 + bass * 3;
+    for (let x = 0; x < w; x++) {
+      const worldX = (x / w - 0.5) * scale * 4;
+      const worldZ = scrollZ + scale * 2;
+      const n = ffbm2(worldX * 0.5, worldZ * 0.5, 4);
+      const height = n * 0.8 + mid * 0.2;
+      // Color by height: water → sand → grass → rock → snow
+      let r, g, b2;
+      if (height < 0.3) { r = 0.05; g = 0.15 + height; b2 = 0.4 + height * 0.5; } // water
+      else if (height < 0.4) { r = 0.6; g = 0.5; b2 = 0.3; } // sand
+      else if (height < 0.65) { r = 0.1; g = 0.35 + (height - 0.4) * 1.5; b2 = 0.08; } // grass
+      else if (height < 0.8) { r = 0.3; g = 0.25; b2 = 0.2; } // rock
+      else { r = 0.8; g = 0.85; b2 = 0.9; } // snow
+      // Distance fog
+      const fog = 1 - depth * 0.7;
+      r *= fog; g *= fog; b2 *= fog;
+      // Treble shimmer on water
+      if (height < 0.3) { r += treble * 0.1 * (1 - depth); b2 += treble * 0.15 * (1 - depth); }
+      // Beat flash
+      r += beat * 0.05; g += beat * 0.05; b2 += beat * 0.05;
+      setPixel(fb, w, x, y, Math.min(1, r), Math.min(1, g), Math.min(1, b2));
+    }
+  }
+  // Sky (top rows)
+  const skyH = Math.floor(h * 0.15);
+  for (let y = 0; y < skyH; y++) for (let x = 0; x < w; x++) {
+    const gy = y / skyH;
+    setPixel(fb, w, x, y, 0.1 + gy * 0.1, 0.15 + gy * 0.15, 0.4 + gy * 0.2);
+  }
+};
+
+// 60. Supernova — expanding shockwave with particle debris
+const NOVA_PARTICLES: { x: number; y: number; vx: number; vy: number; life: number; hue: number }[] = [];
+let novaTimer = 0;
+const shaderSupernova: ShaderFn = (fb, w, h, t, bands, bass, mid, treble, beat) => {
+  const cx = w / 2, cy = h / 2;
+  // Background — deep space
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const star = fhash(x * 347 + y * 991) > 0.97 ? 0.3 + fhash(x * 113 + y * 773) * 0.5 : 0;
+    setPixel(fb, w, x, y, star * 0.8, star * 0.85, star);
+  }
+  // Beat triggers nova burst
+  novaTimer += 1;
+  if (beat > 0.6 || novaTimer > 60) {
+    novaTimer = 0;
+    for (let i = 0; i < 30; i++) {
+      const angle = Math.random() * Math.PI * 2;
+      const speed = 0.5 + Math.random() * 3;
+      NOVA_PARTICLES.push({ x: cx, y: cy, vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed, life: 40 + Math.random() * 40, hue: Math.random() });
+    }
+  }
+  // Shockwave ring
+  const ringR = (novaTimer / 60) * Math.max(w, h) * 0.6;
+  const ringW2 = 2 + bass * 3;
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const dx = x - cx, dy = y - cy;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    if (Math.abs(dist - ringR) < ringW2) {
+      const bri = (1 - Math.abs(dist - ringR) / ringW2) * 0.6;
+      const idx = (y * w + x) * 4;
+      fb[idx] = Math.min(1, fb[idx] + bri); fb[idx+1] = Math.min(1, fb[idx+1] + bri * 0.7); fb[idx+2] = Math.min(1, fb[idx+2] + bri * 0.3);
+    }
+  }
+  // Update + draw particles
+  for (let i = NOVA_PARTICLES.length - 1; i >= 0; i--) {
+    const p = NOVA_PARTICLES[i];
+    p.x += p.vx; p.y += p.vy; p.life--;
+    p.vx *= 0.98; p.vy *= 0.98;
+    if (p.life <= 0) { NOVA_PARTICLES.splice(i, 1); continue; }
+    const ix = Math.floor(p.x), iy = Math.floor(p.y);
+    if (ix >= 0 && ix < w && iy >= 0 && iy < h) {
+      const bri = p.life / 80;
+      const [pr, pg, pb] = hsl(p.hue, 0.9, bri * 0.8);
+      const idx = (iy * w + ix) * 4;
+      fb[idx] = Math.min(1, fb[idx] + pr); fb[idx+1] = Math.min(1, fb[idx+1] + pg); fb[idx+2] = Math.min(1, fb[idx+2] + pb);
+    }
+  }
+  // Central glow
+  const glowR = 4 + bass * 3;
+  for (let dy = -Math.ceil(glowR); dy <= Math.ceil(glowR); dy++) for (let dx = -Math.ceil(glowR); dx <= Math.ceil(glowR); dx++) {
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    if (dist < glowR) {
+      const px = Math.floor(cx) + dx, py = Math.floor(cy) + dy;
+      if (px >= 0 && px < w && py >= 0 && py < h) {
+        const bri = (1 - dist / glowR) * (0.5 + treble * 0.5);
+        const idx = (py * w + px) * 4;
+        fb[idx] = Math.min(1, fb[idx] + bri); fb[idx+1] = Math.min(1, fb[idx+1] + bri * 0.8); fb[idx+2] = Math.min(1, fb[idx+2] + bri * 0.4);
+      }
+    }
+  }
+};
+
 const SHADERS: { name: string; fn: ShaderFn }[] = [
   { name: "Spectrum",     fn: shaderSpectrum     },
   { name: "Radial",       fn: shaderRadial        },
@@ -2120,6 +2433,15 @@ const SHADERS: { name: string; fn: ShaderFn }[] = [
   { name: "✦ Dreamscape",  fn: shaderDreamscape    },
   { name: "✦ Neon City",   fn: shaderNeonCity      },
   { name: "✦ Wormhole",    fn: shaderWormhole      },
+  // ✦ Art Pieces III (53-60)
+  { name: "✦ Mandelbrot",  fn: shaderMandelbrot    },
+  { name: "✦ Snowfall",    fn: shaderSnowfall      },
+  { name: "✦ Kaleidoscope",fn: shaderKaleidoscope  },
+  { name: "✦ Cyber Rain",  fn: shaderCyberRain     },
+  { name: "✦ DNA Helix",   fn: shaderDNA           },
+  { name: "✦ Lissajous Web",fn: shaderLissajousWeb },
+  { name: "✦ Terrain",     fn: shaderTerrain       },
+  { name: "✦ Supernova",   fn: shaderSupernova     },
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
