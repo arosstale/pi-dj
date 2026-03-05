@@ -2612,6 +2612,149 @@ function renderBrailleRain2(bands:Float32Array,cols:number,rows:number,frame:num
     const b=Math.floor(120+lv*135);line+=`\x1b[38;2;${Math.floor(maxV*0.3)};${Math.floor(maxV*0.5)};${Math.min(255,b)}m${brailleChar(braille)}`;
   }lines.push(line+"\x1b[0m");}return lines.join("\n");}
 
+// ── braille shaders III (15-20) ──
+
+// 15. Heartbeat — ECG-style line with beat pulses
+function renderBrailleHeartbeat(bands:Float32Array,cols:number,rows:number,frame:number,time:number):string{
+  const dotRows=rows*4,dotCols=cols*2;const dots=new Uint8Array(dotRows*dotCols);
+  const cy=dotRows/2;
+  for(let x=0;x<dotCols;x++){
+    const phase=(x/dotCols)*Math.PI*8+time*3;
+    const bass=bands[0]||0,mid=bands[Math.floor(bands.length/2)]||0;
+    // Flat line with periodic spikes
+    const spike=Math.sin(phase)>0.9?Math.sin(phase*3)*dotRows*0.3*(0.5+bass):0;
+    const y2=cy+spike+Math.sin(phase*0.5)*mid*3;
+    const iy=Math.round(y2);
+    if(iy>=0&&iy<dotRows)dots[iy*dotCols+x]=255;
+    // Fading trail
+    if(iy-1>=0&&iy-1<dotRows)dots[(iy-1)*dotCols+x]=120;
+    if(iy+1>=0&&iy+1<dotRows)dots[(iy+1)*dotCols+x]=120;
+  }
+  const lines:string[]=[];
+  for(let row=0;row<rows;row++){let line="";for(let ch=0;ch<cols;ch++){let braille=0,maxV=0;
+    for(let dr=0;dr<4;dr++)for(let dc=0;dc<2;dc++){const v=dots[(row*4+dr)*dotCols+ch*2+dc];if(v>20){braille|=BRAILLE_BIT[dr][dc];maxV=Math.max(maxV,v);}}
+    line+=maxV>0?`\x1b[38;2;${Math.min(255,maxV+50)};${Math.floor(maxV*0.2)};${Math.floor(maxV*0.2)}m${brailleChar(braille)}`:`\x1b[38;2;20;5;5m${brailleChar(0)}`;
+  }lines.push(line+"\x1b[0m");}return lines.join("\n");}
+
+// 16. Ripple — concentric expanding circles from center
+function renderBrailleRipple(bands:Float32Array,cols:number,rows:number,frame:number,time:number):string{
+  const dotRows=rows*4,dotCols=cols*2;const dots=new Uint8Array(dotRows*dotCols);
+  const cx=dotCols/2,cy=dotRows/2;
+  const bass=bands[0]||0;
+  for(let y=0;y<dotRows;y++)for(let x=0;x<dotCols;x++){
+    const dx=x-cx,dy=(y-cy)*1.5;const dist=Math.sqrt(dx*dx+dy*dy);
+    const wave=Math.sin(dist*0.5-time*4)*0.5+0.5;
+    const ring=(Math.sin(dist*0.3-time*2+bass*3)>0.6)?200:0;
+    const v=Math.floor(wave*100+ring);
+    dots[y*dotCols+x]=Math.min(255,v);
+  }
+  const lines:string[]=[];
+  for(let row=0;row<rows;row++){let line="";for(let ch=0;ch<cols;ch++){let braille=0,maxV=0;
+    for(let dr=0;dr<4;dr++)for(let dc=0;dc<2;dc++){const v=dots[(row*4+dr)*dotCols+ch*2+dc];if(v>50){braille|=BRAILLE_BIT[dr][dc];maxV=Math.max(maxV,v);}}
+    const bi=Math.floor(ch/cols*bands.length),lv=bands[Math.min(bi,bands.length-1)]||0;
+    line+=maxV>0?`\x1b[38;2;${Math.floor(50+lv*100)};${Math.floor(100+maxV*0.4)};${Math.min(255,Math.floor(180+lv*75))}m${brailleChar(braille)}`:`\x1b[38;2;8;8;15m${brailleChar(0)}`;
+  }lines.push(line+"\x1b[0m");}return lines.join("\n");}
+
+// 17. Waveform3D — stacked waveform layers with depth
+function renderBrailleWaveform3D(bands:Float32Array,cols:number,rows:number,frame:number,time:number):string{
+  const dotRows=rows*4,dotCols=cols*2;const dots=new Uint8Array(dotRows*dotCols);
+  const layers=5;
+  for(let l=0;l<layers;l++){
+    const yBase=Math.floor(dotRows*0.2+l*dotRows*0.15);
+    const phase=time*2+l*0.8;
+    for(let x=0;x<dotCols;x++){
+      const bi=Math.floor(x/dotCols*bands.length);
+      const amp=(bands[Math.min(bi,bands.length-1)]||0)*dotRows*0.12;
+      const wave=Math.sin(x*0.15+phase)*amp;
+      const y2=yBase+Math.floor(wave);
+      if(y2>=0&&y2<dotRows){dots[y2*dotCols+x]=Math.max(dots[y2*dotCols+x],200-l*30);}
+    }
+  }
+  const lines:string[]=[];
+  for(let row=0;row<rows;row++){let line="";for(let ch=0;ch<cols;ch++){let braille=0,maxV=0;
+    for(let dr=0;dr<4;dr++)for(let dc=0;dc<2;dc++){const v=dots[(row*4+dr)*dotCols+ch*2+dc];if(v>20){braille|=BRAILLE_BIT[dr][dc];maxV=Math.max(maxV,v);}}
+    line+=maxV>0?`\x1b[38;2;${Math.floor(maxV*0.8)};${Math.floor(maxV*0.5)};${Math.min(255,Math.floor(maxV+55))}m${brailleChar(braille)}`:`\x1b[38;2;5;5;10m${brailleChar(0)}`;
+  }lines.push(line+"\x1b[0m");}return lines.join("\n");}
+
+// 18. Fractal Tree — branching tree that sways with bass
+function renderBrailleFractalTree(bands:Float32Array,cols:number,rows:number,frame:number,time:number):string{
+  const dotRows=rows*4,dotCols=cols*2;const dots=new Uint8Array(dotRows*dotCols);
+  const bass=bands[0]||0,treble=bands[bands.length-1]||0;
+  function branch(x:number,y:number,angle:number,len:number,depth:number){
+    if(depth<=0||len<2)return;
+    const ex=x+Math.cos(angle)*len,ey=y-Math.sin(angle)*len;
+    // Draw line
+    const steps=Math.ceil(len);
+    for(let i=0;i<=steps;i++){
+      const px=Math.floor(x+(ex-x)*i/steps),py=Math.floor(y+(ey-y)*i/steps);
+      if(px>=0&&px<dotCols&&py>=0&&py<dotRows)dots[py*dotCols+px]=Math.min(255,150+depth*20);
+    }
+    const sway=Math.sin(time*1.5+depth*0.5)*0.2*bass;
+    branch(ex,ey,angle+0.4+sway,len*0.7,depth-1);
+    branch(ex,ey,angle-0.4+sway,len*0.7,depth-1);
+    if(depth>3&&treble>0.3)branch(ex,ey,angle+sway,len*0.5,depth-2);
+  }
+  branch(dotCols/2,dotRows-2,Math.PI/2,dotRows*0.25,7);
+  const lines:string[]=[];
+  for(let row=0;row<rows;row++){let line="";for(let ch=0;ch<cols;ch++){let braille=0,maxV=0;
+    for(let dr=0;dr<4;dr++)for(let dc=0;dc<2;dc++){const v=dots[(row*4+dr)*dotCols+ch*2+dc];if(v>20){braille|=BRAILLE_BIT[dr][dc];maxV=Math.max(maxV,v);}}
+    const green2=Math.floor(80+maxV*0.6),brown=Math.floor(40+maxV*0.3);
+    line+=maxV>0?`\x1b[38;2;${brown};${green2};${Math.floor(maxV*0.15)}m${brailleChar(braille)}`:`\x1b[38;2;5;8;3m${brailleChar(0)}`;
+  }lines.push(line+"\x1b[0m");}return lines.join("\n");}
+
+// 19. Pendulum — swinging pendulums at different frequencies
+function renderBraillePendulum(bands:Float32Array,cols:number,rows:number,frame:number,time:number):string{
+  const dotRows=rows*4,dotCols=cols*2;const dots=new Uint8Array(dotRows*dotCols);
+  const numPendulums=Math.min(12,Math.floor(dotCols/4));
+  for(let p=0;p<numPendulums;p++){
+    const anchorX=Math.floor((p+0.5)/numPendulums*dotCols);
+    const freq=0.8+p*0.15;const len=dotRows*0.6;
+    const bi=Math.floor(p/numPendulums*bands.length);
+    const amp=0.5+((bands[Math.min(bi,bands.length-1)]||0))*0.8;
+    const angle=Math.sin(time*freq)*amp;
+    const bx=anchorX+Math.sin(angle)*len,by=Math.cos(angle)*len;
+    // Draw string
+    const steps=Math.ceil(len);
+    for(let i=0;i<=steps;i++){
+      const px=Math.floor(anchorX+(bx-anchorX)*i/steps),py=Math.floor(i/steps*by);
+      if(px>=0&&px<dotCols&&py>=0&&py<dotRows)dots[py*dotCols+px]=Math.min(255,100+i);
+    }
+    // Bob
+    const bobx=Math.floor(bx),boby=Math.floor(by);
+    for(let dy=-1;dy<=1;dy++)for(let dx=-1;dx<=1;dx++){
+      const px=bobx+dx,py=boby+dy;
+      if(px>=0&&px<dotCols&&py>=0&&py<dotRows)dots[py*dotCols+px]=255;
+    }
+  }
+  const lines:string[]=[];
+  for(let row=0;row<rows;row++){let line="";for(let ch=0;ch<cols;ch++){let braille=0,maxV=0;
+    for(let dr=0;dr<4;dr++)for(let dc=0;dc<2;dc++){const v=dots[(row*4+dr)*dotCols+ch*2+dc];if(v>20){braille|=BRAILLE_BIT[dr][dc];maxV=Math.max(maxV,v);}}
+    line+=maxV>0?`\x1b[38;2;${Math.min(255,Math.floor(maxV+30))};${Math.floor(maxV*0.7)};${Math.floor(maxV*0.3)}m${brailleChar(braille)}`:`\x1b[38;2;10;8;5m${brailleChar(0)}`;
+  }lines.push(line+"\x1b[0m");}return lines.join("\n");}
+
+// 20. Terrain braille — scrolling height map
+function renderBrailleTerrain(bands:Float32Array,cols:number,rows:number,frame:number,time:number):string{
+  const dotRows=rows*4,dotCols=cols*2;const dots=new Uint8Array(dotRows*dotCols);
+  const bass=bands[0]||0;
+  for(let y=0;y<dotRows;y++){
+    const depth=(y+1)/dotRows;
+    const scale=1/(depth+0.05);
+    for(let x=0;x<dotCols;x++){
+      const wx=(x/dotCols-0.5)*scale*3,wz=time*1.5+scale*2+bass;
+      // Simple noise
+      const n=Math.sin(wx*1.7+wz*0.8)*Math.cos(wx*0.6+wz*1.3)*0.5+0.5;
+      const threshold=0.35+depth*0.1;
+      if(n>threshold)dots[y*dotCols+x]=Math.floor(100+n*155);
+    }
+  }
+  const lines:string[]=[];
+  for(let row=0;row<rows;row++){let line="";for(let ch=0;ch<cols;ch++){let braille=0,maxV=0;
+    for(let dr=0;dr<4;dr++)for(let dc=0;dc<2;dc++){const v=dots[(row*4+dr)*dotCols+ch*2+dc];if(v>20){braille|=BRAILLE_BIT[dr][dc];maxV=Math.max(maxV,v);}}
+    const depth2=(row*4)/(dotRows);
+    const g2=Math.floor(50+maxV*0.5*(1-depth2));
+    line+=maxV>0?`\x1b[38;2;${Math.floor(30+maxV*0.2)};${g2};${Math.floor(20+maxV*0.15)}m${brailleChar(braille)}`:`\x1b[38;2;5;10;5m${brailleChar(0)}`;
+  }lines.push(line+"\x1b[0m");}return lines.join("\n");}
+
 const BRAILLE_SHADERS: { name: string; fn: BrailleShaderFn }[] = [
   { name: "◦ Bars",      fn: (bands,cols,rows)           => renderBrailleBars(bands,cols,rows) },
   { name: "◦ Columns",   fn: (bands,cols,rows)           => renderBrailleColumns(bands,cols,rows) },
@@ -2628,6 +2771,13 @@ const BRAILLE_SHADERS: { name: string; fn: BrailleShaderFn }[] = [
   { name: "◦ Spectro",   fn: (bands,cols,rows,frame)     => renderBrailleSpectro(bands,cols,rows,frame) },
   { name: "◦ Circle",    fn: (bands,cols,rows,frame,t)   => renderBrailleCircle(bands,cols,rows,frame,t) },
   { name: "◦ Rain",      fn: (bands,cols,rows,frame,t)   => renderBrailleRain2(bands,cols,rows,frame,t) },
+  // ── braille III (15-20) ──
+  { name: "◦ Heartbeat", fn: (bands,cols,rows,frame,t)   => renderBrailleHeartbeat(bands,cols,rows,frame,t) },
+  { name: "◦ Ripple",    fn: (bands,cols,rows,frame,t)   => renderBrailleRipple(bands,cols,rows,frame,t) },
+  { name: "◦ Wave3D",    fn: (bands,cols,rows,frame,t)   => renderBrailleWaveform3D(bands,cols,rows,frame,t) },
+  { name: "◦ FracTree",  fn: (bands,cols,rows,frame,t)   => renderBrailleFractalTree(bands,cols,rows,frame,t) },
+  { name: "◦ Pendulum",  fn: (bands,cols,rows,frame,t)   => renderBraillePendulum(bands,cols,rows,frame,t) },
+  { name: "◦ Terrain",   fn: (bands,cols,rows,frame,t)   => renderBrailleTerrain(bands,cols,rows,frame,t) },
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────

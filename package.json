@@ -1,6 +1,6 @@
 {
   "name": "pi-dj",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "description": "AI music suite for pi — YouTube, global radio (30k+ stations), Suno, Lyria AI, SoundCloud/Bandcamp, mix, trim, BPM. Windows + macOS + Linux + Termux.",
   "keywords": [
     "pi-package",
