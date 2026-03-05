@@ -3189,6 +3189,109 @@ function renderBrailleTerrain(bands:Float32Array,cols:number,rows:number,frame:n
     line+=maxV>0?`\x1b[38;2;${Math.floor(30+maxV*0.2)};${g2};${Math.floor(20+maxV*0.15)}m${brailleChar(braille)}`:`\x1b[38;2;5;10;5m${brailleChar(0)}`;
   }lines.push(line+"\x1b[0m");}return lines.join("\n");}
 
+// ── braille IV functions (21-25) ──
+
+// 21. Spiral — Archimedean spiral that pulses with bass
+function renderBrailleSpiral(bands:Float32Array,cols:number,rows:number,frame:number,time:number):string{
+  const dotRows=rows*4,dotCols=cols*2;const dots=new Uint8Array(dotRows*dotCols);
+  const cx=dotCols/2,cy=dotRows/2;const bass=bands[0]||0;
+  for(let a=0;a<Math.PI*12;a+=0.03){
+    const r2=a*1.5*(1+bass*0.3);
+    const px=Math.floor(cx+Math.cos(a+time*2)*r2),py=Math.floor(cy+Math.sin(a+time*2)*r2*0.6);
+    if(px>=0&&px<dotCols&&py>=0&&py<dotRows)dots[py*dotCols+px]=Math.min(255,180+Math.floor(a*5)%75);
+  }
+  const lines:string[]=[];
+  for(let row=0;row<rows;row++){let line="";for(let ch=0;ch<cols;ch++){let braille=0,maxV=0;
+    for(let dr=0;dr<4;dr++)for(let dc=0;dc<2;dc++){const v=dots[(row*4+dr)*dotCols+ch*2+dc];if(v>20){braille|=BRAILLE_BIT[dr][dc];maxV=Math.max(maxV,v);}}
+    line+=maxV>0?`\x1b[38;2;${Math.floor(maxV*0.9)};${Math.floor(maxV*0.5)};${Math.min(255,Math.floor(maxV+30))}m${brailleChar(braille)}`:`\x1b[38;2;5;3;8m${brailleChar(0)}`;
+  }lines.push(line+"\x1b[0m");}return lines.join("\n");}
+
+// 22. Waveform Dual — left+right channel waveforms mirrored
+function renderBrailleWaveformDual(bands:Float32Array,cols:number,rows:number,frame:number,time:number,samples:Float32Array):string{
+  const dotRows=rows*4,dotCols=cols*2;const dots=new Uint8Array(dotRows*dotCols);
+  const cy=dotRows/2;
+  if(samples&&samples.length>0){
+    for(let x=0;x<dotCols;x++){
+      const si=Math.floor(x/dotCols*samples.length);
+      const v=samples[Math.min(si,samples.length-1)]||0;
+      const y1=Math.floor(cy-v*cy*0.8),y2=Math.floor(cy+v*cy*0.8);
+      if(y1>=0&&y1<dotRows)dots[y1*dotCols+x]=220;
+      if(y2>=0&&y2<dotRows)dots[y2*dotCols+x]=180;
+    }
+  }else{
+    for(let x=0;x<dotCols;x++){
+      const bi=Math.floor(x/dotCols*bands.length);
+      const v=bands[Math.min(bi,bands.length-1)]||0;
+      const y1=Math.floor(cy-v*cy*0.6),y2=Math.floor(cy+v*cy*0.6);
+      if(y1>=0&&y1<dotRows)dots[y1*dotCols+x]=200;
+      if(y2>=0&&y2<dotRows)dots[y2*dotCols+x]=160;
+    }
+  }
+  // Center line
+  for(let x=0;x<dotCols;x++)if(dots[cy*dotCols+x]<50)dots[cy*dotCols+x]=50;
+  const lines:string[]=[];
+  for(let row=0;row<rows;row++){let line="";for(let ch=0;ch<cols;ch++){let braille=0,maxV=0;
+    for(let dr=0;dr<4;dr++)for(let dc=0;dc<2;dc++){const v=dots[(row*4+dr)*dotCols+ch*2+dc];if(v>20){braille|=BRAILLE_BIT[dr][dc];maxV=Math.max(maxV,v);}}
+    line+=maxV>0?`\x1b[38;2;${Math.floor(maxV*0.3)};${Math.min(255,Math.floor(maxV+20))};${Math.floor(maxV*0.5)}m${brailleChar(braille)}`:`\x1b[38;2;5;10;5m${brailleChar(0)}`;
+  }lines.push(line+"\x1b[0m");}return lines.join("\n");}
+
+// 23. Diamonds — expanding diamond shapes from center
+function renderBrailleDiamonds(bands:Float32Array,cols:number,rows:number,frame:number,time:number):string{
+  const dotRows=rows*4,dotCols=cols*2;const dots=new Uint8Array(dotRows*dotCols);
+  const cx=dotCols/2,cy=dotRows/2;const bass=bands[0]||0;
+  for(let y=0;y<dotRows;y++)for(let x=0;x<dotCols;x++){
+    const d=Math.abs(x-cx)+Math.abs((y-cy)*1.5);
+    const ring=Math.sin(d*0.3-time*3+bass*2)*0.5+0.5;
+    if(ring>0.6)dots[y*dotCols+x]=Math.floor(ring*255);
+  }
+  const lines:string[]=[];
+  for(let row=0;row<rows;row++){let line="";for(let ch=0;ch<cols;ch++){let braille=0,maxV=0;
+    for(let dr=0;dr<4;dr++)for(let dc=0;dc<2;dc++){const v=dots[(row*4+dr)*dotCols+ch*2+dc];if(v>20){braille|=BRAILLE_BIT[dr][dc];maxV=Math.max(maxV,v);}}
+    const bi=Math.floor(ch/cols*bands.length),lv=bands[Math.min(bi,bands.length-1)]||0;
+    line+=maxV>0?`\x1b[38;2;${Math.min(255,Math.floor(180+lv*75))};${Math.floor(maxV*0.6)};${Math.floor(maxV*0.8)}m${brailleChar(braille)}`:`\x1b[38;2;8;5;8m${brailleChar(0)}`;
+  }lines.push(line+"\x1b[0m");}return lines.join("\n");}
+
+// 24. Bounce — balls bouncing with gravity
+const BOUNCE_BALLS:{x:number;y:number;vx:number;vy:number}[]=[];
+function renderBrailleBounce(bands:Float32Array,cols:number,rows:number,frame:number,time:number):string{
+  const dotRows=rows*4,dotCols=cols*2;const dots=new Uint8Array(dotRows*dotCols);
+  while(BOUNCE_BALLS.length<8)BOUNCE_BALLS.push({x:Math.random()*dotCols,y:Math.random()*dotRows*0.3,vx:(Math.random()-0.5)*2,vy:0});
+  const bass=bands[0]||0;
+  for(const b of BOUNCE_BALLS){
+    b.vy+=0.3;b.x+=b.vx;b.y+=b.vy;
+    if(b.y>=dotRows-2){b.y=dotRows-2;b.vy=-Math.abs(b.vy)*(0.7+bass*0.3);}
+    if(b.x<0){b.x=0;b.vx=Math.abs(b.vx);}if(b.x>=dotCols){b.x=dotCols-1;b.vx=-Math.abs(b.vx);}
+    const ix=Math.floor(b.x),iy=Math.floor(b.y);
+    for(let dy=-1;dy<=1;dy++)for(let dx=-1;dx<=1;dx++){
+      const px=ix+dx,py=iy+dy;
+      if(px>=0&&px<dotCols&&py>=0&&py<dotRows)dots[py*dotCols+px]=255;
+    }
+  }
+  const lines:string[]=[];
+  for(let row=0;row<rows;row++){let line="";for(let ch=0;ch<cols;ch++){let braille=0,maxV=0;
+    for(let dr=0;dr<4;dr++)for(let dc=0;dc<2;dc++){const v=dots[(row*4+dr)*dotCols+ch*2+dc];if(v>20){braille|=BRAILLE_BIT[dr][dc];maxV=Math.max(maxV,v);}}
+    line+=maxV>0?`\x1b[38;2;${Math.min(255,Math.floor(maxV+20))};${Math.floor(maxV*0.7)};${Math.floor(maxV*0.3)}m${brailleChar(braille)}`:`\x1b[38;2;8;5;3m${brailleChar(0)}`;
+  }lines.push(line+"\x1b[0m");}return lines.join("\n");}
+
+// 25. Tunnel — braille version of infinite tunnel
+function renderBrailleTunnel(bands:Float32Array,cols:number,rows:number,frame:number,time:number):string{
+  const dotRows=rows*4,dotCols=cols*2;const dots=new Uint8Array(dotRows*dotCols);
+  const cx=dotCols/2,cy=dotRows/2;const bass=bands[0]||0,treble=bands[bands.length-1]||0;
+  for(let y=0;y<dotRows;y++)for(let x=0;x<dotCols;x++){
+    const dx=x-cx,dy=(y-cy)*1.5;const d=Math.sqrt(dx*dx+dy*dy)+0.01;
+    const angle=Math.atan2(dy,dx);
+    const tunnel=1/d*20;
+    const u=angle/Math.PI,v2=tunnel-time*2;
+    const checker=(Math.floor(u*6)+Math.floor(v2*3))%2;
+    const bri=checker?Math.min(255,Math.floor(150/d*5+bass*100)):Math.floor(50/d*5);
+    if(bri>30&&d>2)dots[y*dotCols+x]=Math.min(255,bri);
+  }
+  const lines:string[]=[];
+  for(let row=0;row<rows;row++){let line="";for(let ch=0;ch<cols;ch++){let braille=0,maxV=0;
+    for(let dr=0;dr<4;dr++)for(let dc=0;dc<2;dc++){const v=dots[(row*4+dr)*dotCols+ch*2+dc];if(v>20){braille|=BRAILLE_BIT[dr][dc];maxV=Math.max(maxV,v);}}
+    line+=maxV>0?`\x1b[38;2;${Math.floor(maxV*0.5)};${Math.floor(maxV*0.3)};${Math.min(255,Math.floor(maxV+30))}m${brailleChar(braille)}`:`\x1b[38;2;3;3;8m${brailleChar(0)}`;
+  }lines.push(line+"\x1b[0m");}return lines.join("\n");}
+
 const BRAILLE_SHADERS: { name: string; fn: BrailleShaderFn }[] = [
   { name: "◦ Bars",      fn: (bands,cols,rows)           => renderBrailleBars(bands,cols,rows) },
   { name: "◦ Columns",   fn: (bands,cols,rows)           => renderBrailleColumns(bands,cols,rows) },
@@ -3212,6 +3315,12 @@ const BRAILLE_SHADERS: { name: string; fn: BrailleShaderFn }[] = [
   { name: "◦ FracTree",  fn: (bands,cols,rows,frame,t)   => renderBrailleFractalTree(bands,cols,rows,frame,t) },
   { name: "◦ Pendulum",  fn: (bands,cols,rows,frame,t)   => renderBraillePendulum(bands,cols,rows,frame,t) },
   { name: "◦ Terrain",   fn: (bands,cols,rows,frame,t)   => renderBrailleTerrain(bands,cols,rows,frame,t) },
+  // ── braille IV (21-25) — push to 100 total ──
+  { name: "◦ Spiral",    fn: (bands,cols,rows,frame,t)   => renderBrailleSpiral(bands,cols,rows,frame,t) },
+  { name: "◦ Waveform",  fn: (bands,cols,rows,frame,t,s) => renderBrailleWaveformDual(bands,cols,rows,frame,t,s) },
+  { name: "◦ Diamonds",  fn: (bands,cols,rows,frame,t)   => renderBrailleDiamonds(bands,cols,rows,frame,t) },
+  { name: "◦ Bounce",    fn: (bands,cols,rows,frame,t)   => renderBrailleBounce(bands,cols,rows,frame,t) },
+  { name: "◦ Tunnel",    fn: (bands,cols,rows,frame,t)   => renderBrailleTunnel(bands,cols,rows,frame,t) },
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
