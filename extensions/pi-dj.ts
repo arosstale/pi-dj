@@ -36,7 +36,7 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 import { execSync, execFileSync, spawn, type ChildProcess } from "node:child_process";
-import { existsSync, readFileSync, mkdirSync } from "node:fs";
+import { existsSync, readFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { homedir, platform, tmpdir } from "node:os";
 import { join, basename, extname, dirname } from "node:path";
 import * as net from "node:net";
@@ -685,7 +685,7 @@ export default function piDj(pi: ExtensionAPI) {
       // Font — bundled in assets/ next to this extension
       // jiti injects __dirname as the real extension directory — use it directly.
       // eslint-disable-next-line no-undef
-      const extDir: string = (typeof __dirname !== "undefined" ? __dirname : dirname(((import.meta as any)?.url ?? "").replace(/\\/g, "/"))) as string;
+      const extDir: string = __dirname;
       const fontB = join(extDir, "..", "assets", "Inter-Bold.ttf").replace(/\\/g, "/").replace(/^\/([a-z])\//i, "$1:/");
       const fontR = join(extDir, "..", "assets", "Inter-Regular.ttf").replace(/\\/g, "/").replace(/^\/([a-z])\//i, "$1:/");
 
@@ -806,14 +806,11 @@ export default function piDj(pi: ExtensionAPI) {
 
       // Step 2: convert SRT → ASS with karaoke styling
       const srtContent = readFileSync(srtPath, "utf-8");
-      const { writeFileSync } = await import("node:fs");
       writeFileSync(assPath, assContent, "utf-8");
 
       // Step 3: render output — burn subs onto audio visualization (bars style)
       ctx.ui.notify(`🎬 Burning subtitles (${styleArg})...`, "info");
-      const extDir: string = (typeof __dirname !== "undefined" ? __dirname :
-        dirname(((import.meta as any)?.url ?? "").replace(/\\/g, "/"))
-      ) as string;
+      const extDir: string = __dirname;
       const fontB = join(extDir, "..", "assets", "Inter-Bold.ttf").replace(/\\/g, "/").replace(/^\/([a-z])\//i, "$1:/");
       const stem2 = basename(inputFile, extname(inputFile));
       const [titlePart, artistPart] = stem2.includes(" - ")
