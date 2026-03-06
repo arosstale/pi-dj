@@ -38,7 +38,7 @@ import { Type } from "@sinclair/typebox";
 import { execSync, execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { existsSync, readFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { homedir, platform, tmpdir } from "node:os";
-import { join, basename, extname, dirname } from "node:path";
+import { join, basename, extname } from "node:path";
 import * as net from "node:net";
 
 // ── Platform ───────────────────────────────────────────────────────────────
@@ -729,6 +729,52 @@ export default function piDj(pi: ExtensionAPI) {
     },
   });
 
+  // ── SRT → ASS converter ─────────────────────────────────────────────
+  function srtToAss(srt: string, style: string): string {
+    const header = [
+      "[Script Info]",
+      "ScriptType: v4.00+",
+      "PlayResX: 1920",
+      "PlayResY: 1080",
+      "",
+      "[V4+ Styles]",
+      "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
+      style === "outline"
+        ? "Style: Default,Inter,64,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,3,0,2,60,60,60,1"
+        : style === "simple"
+        ? "Style: Default,Inter,56,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,0,0,0,0,100,100,0,0,1,2,1,2,60,60,80,1"
+        : "Style: Default,Inter,64,&H00FFFFFF,&H0000FFFF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,3,0,2,60,60,60,1",
+      "",
+      "[Events]",
+      "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
+    ].join("\n");
+
+    // Parse SRT blocks
+    const blocks = srt.trim().split(/\r?\n\r?\n/).filter(Boolean);
+    const events: string[] = [];
+    for (const block of blocks) {
+      const lines = block.trim().split(/\r?\n/);
+      if (lines.length < 3) continue;
+      const timeMatch = lines[1].match(/(\d{2}):(\d{2}):(\d{2}),(\d{3})\s*-->\s*(\d{2}):(\d{2}):(\d{2}),(\d{3})/);
+      if (!timeMatch) continue;
+      const [, sh, sm, ss, sms, eh, em, es, ems] = timeMatch;
+      const start = `${sh}:${sm}:${ss}.${sms.slice(0, 2)}`;
+      const end   = `${eh}:${em}:${es}.${ems.slice(0, 2)}`;
+      const text  = lines.slice(2).join("\\N");
+
+      if (style === "karaoke") {
+        // Calculate duration in centiseconds for karaoke effect
+        const durMs = (+eh * 3600 + +em * 60 + +es) * 1000 + +ems - ((+sh * 3600 + +sm * 60 + +ss) * 1000 + +sms);
+        const durCs = Math.round(durMs / 10);
+        events.push(`Dialogue: 0,${start},${end},Default,,0,0,0,,{\\kf${durCs}}${text}`);
+      } else {
+        events.push(`Dialogue: 0,${start},${end},Default,,0,0,0,,${text}`);
+      }
+    }
+
+    return header + "\n" + events.join("\n") + "\n";
+  }
+
   // ── /subs ─────────────────────────────────────────────────────────────
   // Transcribe audio → SRT → burn as karaoke ASS subtitles into music video
   // Pipeline: audio → ffmpeg whisper filter → .srt → convert to .ass (karaoke) → burn
@@ -806,6 +852,7 @@ export default function piDj(pi: ExtensionAPI) {
 
       // Step 2: convert SRT → ASS with karaoke styling
       const srtContent = readFileSync(srtPath, "utf-8");
+      const assContent = srtToAss(srtContent, styleArg);
       writeFileSync(assPath, assContent, "utf-8");
 
       // Step 3: render output — burn subs onto audio visualization (bars style)
