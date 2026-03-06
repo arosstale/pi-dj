@@ -36,7 +36,7 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 import { execSync, execFileSync, spawn, type ChildProcess } from "node:child_process";
-import { existsSync, readFileSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, mkdirSync, writeFileSync, readdirSync, statSync } from "node:fs";
 import { homedir, platform, tmpdir } from "node:os";
 import { join, basename, extname } from "node:path";
 import * as net from "node:net";
@@ -342,6 +342,10 @@ async function radioSearch(query: string): Promise<RadioStation[]> {
   return merged.sort((a, b) => b.votes - a.votes).slice(0, 5);
 }
 
+// ── Audio file detection ──────────────────────────────────────────────────
+const AUDIO_EXTS = new Set([".mp3", ".flac", ".wav", ".ogg", ".m4a", ".aac", ".opus", ".wma"]);
+function isAudioFile(f: string): boolean { return AUDIO_EXTS.has(extname(f).toLowerCase()); }
+
 // ── Extension ─────────────────────────────────────────────────────────────
 export default function piDj(pi: ExtensionAPI) {
   let statusInterval: ReturnType<typeof setInterval> | null = null;
@@ -509,6 +513,48 @@ export default function piDj(pi: ExtensionAPI) {
         return `${i+1}. ${t.title} (${time})`;
       }).join("\n");
       ctx.ui.notify(`📜 Recent:\n${list}`, "info");
+    },
+  });
+
+  // ── /dj-lib — browse local music library ────────────────────────────
+  pi.registerCommand("dj-lib", {
+    description: "Browse local music library. /dj-lib [subdirectory]",
+    handler: async (args, ctx) => {
+      const sub = args?.trim();
+      const dir = sub ? join(musicDir, sub) : musicDir;
+      if (!existsSync(dir)) { ctx.ui.notify(`Music dir not found: ${dir}`, "warning"); return; }
+
+      let entries: string[];
+      try { entries = readdirSync(dir); } catch { ctx.ui.notify(`Cannot read: ${dir}`, "warning"); return; }
+
+      const subdirs = entries.filter(e => { try { return statSync(join(dir, e)).isDirectory(); } catch { return false; } });
+      const files = entries.filter(e => isAudioFile(e));
+
+      if (!subdirs.length && !files.length) { ctx.ui.notify(`No music found in: ${dir}`, "info"); return; }
+
+      let msg = `🎵 ${dir}\n`;
+      if (subdirs.length) {
+        msg += `\nFolders:\n` + subdirs.slice(0, 10).map(d => `  📁 ${d}`).join("\n");
+        if (subdirs.length > 10) msg += `\n  ... +${subdirs.length - 10} more`;
+      }
+      if (files.length) {
+        msg += `\n\nTracks (${files.length}):\n` + files.slice(0, 15).map(f => `  🎵 ${f}`).join("\n");
+        if (files.length > 15) msg += `\n  ... +${files.length - 15} more`;
+      }
+      ctx.ui.notify(msg, "info");
+    },
+  });
+
+  // ── /dj-viz — launch terminal visualizer ──────────────────────────────
+  pi.registerCommand("dj-viz", {
+    description: "Terminal audio visualizer. /dj-viz [file]",
+    handler: async (args, ctx) => {
+      const file = args?.trim();
+      ctx.ui.notify(
+        "🎨 Starting visualizer...\nUse /djvj in pi-djvj for 100+ shader modes.\n" +
+        (file ? `For this file: try /djvj or ffplay -showmode 1 "${file}"` : "Run /djvj to launch the full visualizer."),
+        "info"
+      );
     },
   });
 
@@ -1052,7 +1098,9 @@ export default function piDj(pi: ExtensionAPI) {
         `/queue <query>        add to queue\n` +
         `/skip                 next track\n` +
         `/repeat               toggle loop\n` +
-        `/history              recently played\n\n` +
+        `/history              recently played\n` +
+        `/dj-lib [dir]         browse local music library\n` +
+        `/dj-viz [file]        terminal visualizer (→ /djvj for 100+ modes)\n\n` +
         `RADIO\n` +
         `/radio <genre|name>   internet radio (Radio Browser, 30k+ stations)\n` +
         `/radio jazz japan     genre + country filter\n` +
