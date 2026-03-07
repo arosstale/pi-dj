@@ -3292,6 +3292,48 @@ function renderBrailleTunnel(bands:Float32Array,cols:number,rows:number,frame:nu
     line+=maxV>0?`\x1b[38;2;${Math.floor(maxV*0.5)};${Math.floor(maxV*0.3)};${Math.min(255,Math.floor(maxV+30))}m${brailleChar(braille)}`:`\x1b[38;2;3;3;8m${brailleChar(0)}`;
   }lines.push(line+"\x1b[0m");}return lines.join("\n");}
 
+// 27. Pulse — pulsating filled ellipse with shockwave ring (inspired by cliamp vis_pulse.go)
+function renderBraillePulse(bands:Float32Array,cols:number,rows:number,frame:number,time:number):string{
+  const dotRows=rows*4,dotCols=cols*2;const dots=new Uint8Array(dotRows*dotCols);
+  const cx=dotCols/2,cy=dotRows/2;
+  const xScale=cy/cx; // squash x so ellipse fills wide terminal
+  const maxR=cy-1;
+  let totalE=0;for(let i=0;i<bands.length;i++)totalE+=bands[i]||0;
+  const avgE=totalE/bands.length;const bass=bands[0]||0;
+  // Shockwave: expanding ring on bass transients
+  const shockPhase=(frame*0.10)%1.0;
+  const shockR=maxR*(0.3+0.7*shockPhase);
+  const shockStrength=avgE*avgE*(1-shockPhase*shockPhase);
+  // Breathing keeps shape alive in silence
+  const breath=Math.sin(frame*0.05)*0.02;
+  for(let y=0;y<dotRows;y++)for(let x=0;x<dotCols;x++){
+    const dx=(x-cx)*xScale,dy=y-cy;
+    const dist=Math.sqrt(dx*dx+dy*dy);
+    // Per-band radius deformation
+    const angle=Math.atan2(dy,dx);
+    const bandIdx=Math.floor(((angle+Math.PI)/(2*Math.PI))*bands.length)%bands.length;
+    const bandE=bands[bandIdx]||0;
+    const radius=maxR*(0.3+avgE*0.4+bandE*0.3+breath);
+    // Solid fill with anti-aliased edge
+    const edgeDist=radius-dist;
+    let intensity=edgeDist>1?1:edgeDist>0?edgeDist:0;
+    // Shockwave ring overlay
+    const ringDist=Math.abs(dist-shockR);
+    if(ringDist<2&&shockStrength>0.05)intensity=Math.min(1,intensity+shockStrength*(1-ringDist/2));
+    if(intensity>0.05){
+      dots[y*dotCols+x]=Math.floor(intensity*255);
+    }
+  }
+  const lines:string[]=[];
+  for(let row=0;row<rows;row++){let line="";for(let ch=0;ch<cols;ch++){let braille=0,maxV=0;
+    for(let dr=0;dr<4;dr++)for(let dc=0;dc<2;dc++){const v=dots[(row*4+dr)*dotCols+ch*2+dc];if(v>20){braille|=BRAILLE_BIT[dr][dc];maxV=Math.max(maxV,v);}}
+    const hue=(maxV/255*120+frame*2)%360;const s=0.8,l=maxV/255*0.5;
+    const c2=(1-Math.abs(2*l-1))*s,x2=c2*(1-Math.abs(hue/60%2-1)),m2=l-c2/2;
+    let r=0,g=0,b=0;
+    if(hue<60){r=c2;g=x2;}else if(hue<120){r=x2;g=c2;}else if(hue<180){g=c2;b=x2;}else if(hue<240){g=x2;b=c2;}else if(hue<300){r=x2;b=c2;}else{r=c2;b=x2;}
+    line+=maxV>0?`\x1b[38;2;${Math.floor((r+m2)*255)};${Math.floor((g+m2)*255)};${Math.floor((b+m2)*255)}m${brailleChar(braille)}`:`\x1b[38;2;3;3;6m${brailleChar(0)}`;
+  }lines.push(line+"\x1b[0m");}return lines.join("\n");}
+
 const BRAILLE_SHADERS: { name: string; fn: BrailleShaderFn }[] = [
   { name: "◦ Bars",      fn: (bands,cols,rows)           => renderBrailleBars(bands,cols,rows) },
   { name: "◦ Columns",   fn: (bands,cols,rows)           => renderBrailleColumns(bands,cols,rows) },
@@ -3321,6 +3363,8 @@ const BRAILLE_SHADERS: { name: string; fn: BrailleShaderFn }[] = [
   { name: "◦ Diamonds",  fn: (bands,cols,rows,frame,t)   => renderBrailleDiamonds(bands,cols,rows,frame,t) },
   { name: "◦ Bounce",    fn: (bands,cols,rows,frame,t)   => renderBrailleBounce(bands,cols,rows,frame,t) },
   { name: "◦ Tunnel",    fn: (bands,cols,rows,frame,t)   => renderBrailleTunnel(bands,cols,rows,frame,t) },
+  // ── braille V (27) — cliamp-inspired ──
+  { name: "◦ Pulse",     fn: (bands,cols,rows,frame,t)   => renderBraillePulse(bands,cols,rows,frame,t) },
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
