@@ -39,7 +39,40 @@
       "extensions/pi-dj.ts",
       "extensions/pi-djvj.ts"
     ],
-    "image": "https://raw.githubusercontent.com/arosstale/pi-dj/master/assets/banner.png"
+    "image": "https://raw.githubusercontent.com/arosstale/pi-dj/master/assets/banner.png",
+    "commands": [
+      "dj-play",
+      "pause",
+      "stop",
+      "np",
+      "vol",
+      "queue",
+      "skip",
+      "repeat",
+      "history",
+      "dj-lib",
+      "dj-viz",
+      "djvj",
+      "viz",
+      "sc",
+      "bandcamp",
+      "bandlab",
+      "mix",
+      "bpm",
+      "render",
+      "subs",
+      "radio",
+      "strudel",
+      "strudel-stop",
+      "dj-help"
+    ],
+    "tools": [
+      "dj_play_music",
+      "dj_queue_music",
+      "dj_radio",
+      "dj_strudel",
+      "dj_strudel_stop"
+    ]
   },
   "dependencies": {
     "@sinclair/typebox": "^0.34.0"
