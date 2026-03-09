@@ -863,10 +863,23 @@ export default function piDj(pi: ExtensionAPI) {
       if (!existsSync(modelPath)) {
         ctx.ui.notify("⬇️ Downloading whisper ggml-base.en.bin (~142MB)...", "info");
         try {
-          execSync(
-            `curl -L -o "${modelPath}" "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin"`,
-            { timeout: 300_000, stdio: "ignore" }
-          );
+          await new Promise<void>((resolve, reject) => {
+            const https = require("node:https");
+            const fs = require("node:fs");
+            const download = (url: string) => {
+              https.get(url, { headers: { "User-Agent": "pi-dj" } }, (res: any) => {
+                if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+                  download(res.headers.location); return;
+                }
+                if (res.statusCode !== 200) { reject(new Error(`HTTP ${res.statusCode}`)); return; }
+                const out = fs.createWriteStream(modelPath);
+                res.pipe(out);
+                out.on("finish", () => { out.close(); resolve(); });
+                out.on("error", reject);
+              }).on("error", reject);
+            };
+            download("https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin");
+          });
         } catch {
           ctx.ui.notify("Download failed. Place ggml-base.en.bin in ~/Music/", "error"); return;
         }
