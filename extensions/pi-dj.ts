@@ -10,7 +10,7 @@
  *   Termux:   pkg install mpv ffmpeg python; pip install yt-dlp
  *
  * Division of labour:
- *   cliamp v1.15+ → local files, HTTP streams, Lyria AI, Navidrome, SoundCloud search, webm (/play /music)
+ *   cliamp v1.20+ → local files, HTTP streams, Lyria AI, Navidrome, Spotify, YouTube Music, visualizers (/play /music)
  *   pi-djvj       → terminal visualizer + fragcoord shaders (/viz /djvj)
  *   pi-dj (this)  → YouTube streaming, downloads, production tools, global radio (/radio)
  *
@@ -1089,7 +1089,7 @@ export default function piDj(pi: ExtensionAPI) {
       const ipc  = ipcReady ? "Node IPC ✅" : "not connected";
       ctx.ui.notify(
         `🎧 pi-dj — ${plat}\n` +
-        `mpv ${ok(tools?.mpv)}  yt-dlp ${ok(tools?.ytdlp)}  ffmpeg ${ok(tools?.ffmpeg)}  scdl ${ok(tools?.scdl)}\n` +
+        `mpv ${ok(tools?.mpv)}  yt-dlp ${ok(tools?.ytdlp)}  ffmpeg ${ok(tools?.ffmpeg)}  cliamp ${ok(tools?.cliamp)}  scdl ${ok(tools?.scdl)}\n` +
         `IPC: ${ipc}  |  Music: ${musicDir}\n\n` +
         `STREAMING (YouTube / mpv)\n` +
         `/dj-play <query|url>  search, URL, or playlist\n` +
@@ -1107,7 +1107,7 @@ export default function piDj(pi: ExtensionAPI) {
         `/radio lyria          Lyria AI generative radio\n` +
         `/radio lyria chill    Lyria with preset\n` +
         `/radio <http url>     stream URL directly\n\n` +
-        `LOCAL FILES → /play (cliamp v1.15 TUI — file browser, Navidrome, SoundCloud search, webm)\n\n` +
+        `LOCAL FILES → /play (cliamp v1.20 TUI — file browser, Spotify, YouTube Music, Navidrome, visualizers)\n\n` +
         `DOWNLOADS\n` +
         `/sc <url>             SoundCloud → MP3\n` +
         `/bandcamp <url>       Bandcamp → MP3\n` +
@@ -1138,10 +1138,10 @@ export default function piDj(pi: ExtensionAPI) {
       query: Type.String({ description: "YouTube search query, URL, or playlist URL" }),
     }),
     async execute(_id, params) {
-      if (!tools?.mpv)   return { content: [{ type: "text", text: `mpv not installed. ${installHint()}` }], isError: true };
-      if (!tools?.ytdlp) return { content: [{ type: "text", text: "yt-dlp not installed. pip install yt-dlp" }], isError: true };
+      if (!tools?.mpv)   throw new Error(`mpv not installed. ${installHint()}`);
+      if (!tools?.ytdlp) throw new Error("yt-dlp not installed. pip install yt-dlp");
       const track = await resolveTrack(params.query);
-      if (!track) return { content: [{ type: "text", text: `Not found: ${params.query}` }], isError: true };
+      if (!track) throw new Error(`Not found: ${params.query}`);
       const title = await playTrack(track.url, track.title);
       return { content: [{ type: "text", text: `▶ ${title}` }] };
     },
@@ -1156,7 +1156,7 @@ export default function piDj(pi: ExtensionAPI) {
     }),
     async execute(_id, params) {
       const track = await resolveTrack(params.query);
-      if (!track) return { content: [{ type: "text", text: `Not found: ${params.query}` }], isError: true };
+      if (!track) throw new Error(`Not found: ${params.query}`);
       if (!isPlaying && tools?.mpv) {
         await playTrack(track.url, track.title);
         return { content: [{ type: "text", text: `▶ ${track.title}` }] };
@@ -1213,13 +1213,13 @@ export default function piDj(pi: ExtensionAPI) {
       }),
     }),
     async execute(_id, params) {
-      if (!tools?.mpv) return { content: [{ type: "text", text: `mpv not installed. ${installHint()}` }], isError: true };
+      if (!tools?.mpv) throw new Error(`mpv not installed. ${installHint()}`);
       const q = params.query.trim();
 
       // Lyria
       if (q.toLowerCase().startsWith("lyria")) {
         const lyriaPath = join(HOME, "Music", "lyria-cli", "index.js");
-        if (!existsSync(lyriaPath)) return { content: [{ type: "text", text: "lyria-cli not found. Run /radio lyria for setup." }], isError: true };
+        if (!existsSync(lyriaPath)) throw new Error("lyria-cli not found. Run /radio lyria for setup.");
         const preset = q.replace(/^lyria\s*/i, "").trim() || "1";
         const args2 = /^\d$/.test(preset) ? [preset] : ["--prompt", preset];
         spawn("node", [lyriaPath, ...args2], { detached: true, stdio: "ignore" }).unref();
@@ -1229,18 +1229,18 @@ export default function piDj(pi: ExtensionAPI) {
       // Direct URL
       if (q.startsWith("http")) {
         try { playStream(q, q); }
-        catch (e: any) { return { content: [{ type: "text", text: String(e.message) }], isError: true }; }
+        catch (e: any) { throw new Error(String(e.message)); }
         return { content: [{ type: "text", text: `📻 Streaming: ${q}` }] };
       }
 
       // Radio Browser search
       const stations = await radioSearch(q);
-      if (!stations.length) return { content: [{ type: "text", text: `No stations found for "${q}"` }], isError: true };
+      if (!stations.length) throw new Error(`No stations found for "${q}"`);
 
       const station = stations[0];
       const label = `${station.name}${station.country ? ` (${station.country})` : ""}`;
       try { playStream(station.url_resolved, label); }
-      catch (e: any) { return { content: [{ type: "text", text: String(e.message) }], isError: true }; }
+      catch (e: any) { throw new Error(String(e.message)); }
 
       const others = stations.slice(1).map(s => s.name).join(", ");
       return {
