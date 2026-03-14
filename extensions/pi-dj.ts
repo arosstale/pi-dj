@@ -10,7 +10,7 @@
  *   Termux:   pkg install mpv ffmpeg python; pip install yt-dlp
  *
  * Division of labour:
- *   cliamp v1.20+ → local files, HTTP streams, Lyria AI, Navidrome, Spotify, YouTube Music, visualizers (/play /music)
+ *   cliamp v1.21+ → local files, HTTP streams, Lyria AI, Navidrome, Spotify, YouTube Music, visualizers (/play /music)
  *   pi-djvj       → terminal visualizer + fragcoord shaders (/viz /djvj)
  *   pi-dj (this)  → YouTube streaming, downloads, production tools, global radio (/radio)
  *
@@ -1120,7 +1120,7 @@ export default function piDj(pi: ExtensionAPI) {
         `/radio lyria          Lyria AI generative radio\n` +
         `/radio lyria chill    Lyria with preset\n` +
         `/radio <http url>     stream URL directly\n\n` +
-        `LOCAL FILES → /play (cliamp v1.20 TUI — file browser, Spotify, YouTube Music, Navidrome, visualizers)\n\n` +
+        `LOCAL FILES → /play (cliamp v1.21+ TUI — file browser, Spotify, YouTube Music, Navidrome, visualizers)\n\n` +
         `DOWNLOADS\n` +
         `/sc <url>             SoundCloud → MP3\n` +
         `/bandcamp <url>       Bandcamp → MP3\n` +
